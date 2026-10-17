@@ -285,6 +285,7 @@ public class MainActivity extends Activity {
         if (out.contains("点赞入口被触发")) sb.append("点赞按钮入口：已触发过（下面“最近状态”里有调用栈）。\n");
         if (out.contains("双击监听被触发")) sb.append("双击：识别到了双击监听（见下面的类名）。\n");
         else sb.append("双击：还没识别到双击监听——在视频上双击一下再点检查；仍没有说明抖音没用系统手势识别双击。\n");
+        if (out.contains("双击后点赞仍被触发")) sb.append("✗ 双击后点赞仍然被触发了：调用栈在下面“最近状态”里，把它发给我就能找到真正的点赞入口。\n");
         if (out.contains("里没有叫")) sb.append("✗ 点赞入口方法名对不上：抖音版本变了，需要重新记录。\n");
         String[] lines = out.trim().split("\n");
         int from = Math.max(0, lines.length - 12);
