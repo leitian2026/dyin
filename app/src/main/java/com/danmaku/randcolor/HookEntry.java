@@ -15,6 +15,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             String pkg = lp.packageName;
             if (pkg == null || lp.appInfo == null) return;
             if ("android".equals(pkg) || "com.danmaku.randcolor".equals(pkg)) return;
+            if (lp.processName != null && lp.processName.contains("sandboxed_process")) return; // 沙箱子进程跟界面无关
             if (!DONE.compareAndSet(false, true)) return; // 一个进程只初始化一次
             DanmakuHook.init(lp);
         } catch (Throwable t) {
