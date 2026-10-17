@@ -153,9 +153,18 @@ final class CommentHook {
         }
     }
 
+    private static boolean fromCommentPanel() {
+        for (StackTraceElement e : new Throwable().getStackTrace()) {
+            String c = e.getClassName();
+            if (c.contains(".comment.") || c.contains("comment_split") || c.contains("CommentPad") || c.contains("CommentList")) return true;
+        }
+        return false;
+    }
+
     private static boolean inInflate() {
         for (StackTraceElement e : new Throwable().getStackTrace()) {
-            if (e.getClassName().equals("android.view.LayoutInflater")) return true;
+            String c = e.getClassName();
+            if (c.equals("android.view.LayoutInflater") || c.startsWith("com.by.inflate_lib.") || c.startsWith("nita.inflate.")) return true;
         }
         return false;
     }
@@ -185,6 +194,7 @@ final class CommentHook {
             protected void beforeHookedMethod(MethodHookParam p) {
                 try {
                     if (!guardActive()) return;
+                    if (fromCommentPanel()) return; // 评论面板打开 / 收起的动画：不是红心，也不能挡
                     Object t = p.thisObject;
                     String d = t.getClass().getName();
                     if (t instanceof android.animation.ObjectAnimator) {
@@ -618,7 +628,7 @@ final class CommentHook {
             if (c.startsWith("com.ss.android.ugc.aweme.")) c = c.substring(25);
             if (n > 0) sb.append(" < ");
             sb.append(c).append('.').append(e.getMethodName());
-            if (++n >= 14) break;
+            if (++n >= 9) break;
         }
         return sb.toString();
     }
