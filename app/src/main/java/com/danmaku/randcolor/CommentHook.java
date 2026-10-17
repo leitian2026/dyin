@@ -49,6 +49,7 @@ final class CommentHook {
     private static boolean installed;
     private static volatile boolean diggHooked;
     private static volatile boolean observerHooked;
+    private static volatile boolean diggLayoutHooked;
     /** 在这个时间点之前，点赞观察者的调用一律拦掉（只在“双击→评论”开着时才会被设置）。 */
     private static volatile long dtapGuardUntil;
     /** 最近一次识别到双击的时间（不管开关开没开），用来诊断。 */
@@ -120,7 +121,7 @@ final class CommentHook {
                                 if (!guardActive() || p.args == null || !(p.args[0] instanceof View)) return;
                                 String d = describe((View) p.args[0]);
                                 if (inInflate()) return; // 布局预加载（LayoutInflater / X2C）不是红心：不记、更不能挡（挡了会缺控件）
-                                if (HEART.matcher(d).find()) {
+                                if (fromDiggLayout()) {
                                     logOnce("hv-add:" + d, "已挡掉双击红心（addView）：" + d + " ← " + callers());
                                     p.setResult(null);
                                 } else if (fromUserInput() && !fromCommentPanel()) {
@@ -142,7 +143,7 @@ final class CommentHook {
                         if (!guardActive() || p.args == null || ((Integer) p.args[0]) != View.VISIBLE) return;
                         View v = (View) p.thisObject;
                         String d = describe(v);
-                        if (HEART_LOTTIE.matcher(d).find()) {
+                        if (fromDiggLayout()) {
                             logOnce("hv-vis:" + d, "已挡掉双击红心（setVisibility）：" + d + " ← " + callers());
                             p.args[0] = View.INVISIBLE;
                         }
@@ -191,6 +192,16 @@ final class CommentHook {
         }
     }
 
+    /** 双击红心就是 common.widget.DiggLayout 生成的（1.9.3 日志：onTouch → BaseListFragmentPanel → DiggLayout.LIZJ → addView(ImageView) + startAnimation）。 */
+    private static final String DIGG_LAYOUT = "com.ss.android.ugc.aweme.common.widget.DiggLayout";
+
+    private static boolean fromDiggLayout() {
+        for (StackTraceElement e : new Throwable().getStackTrace()) {
+            if (e.getClassName().equals(DIGG_LAYOUT)) return true;
+        }
+        return false;
+    }
+
     private static boolean fromCommentPanel() {
         for (StackTraceElement e : new Throwable().getStackTrace()) {
             String c = e.getClassName();
@@ -217,7 +228,7 @@ final class CommentHook {
                         if (!guardActive() || !(p.getResult() instanceof View)) return;
                         View v = (View) p.getResult();
                         String d = describe(v);
-                        boolean h = HEART.matcher(d).find();
+                        boolean h = fromDiggLayout();
                         logOnce("hv-stub:" + d, "双击后 ViewStub 展开：" + d + (h ? "（已隐藏）" : "") + " ← " + callers());
                         if (h) v.setVisibility(View.GONE);
                     } catch (Throwable ignored) {
@@ -240,7 +251,7 @@ final class CommentHook {
                         if (tg instanceof View) d += " → " + describe((View) tg);
                         else if (tg != null) d += " → " + tg.getClass().getName();
                     }
-                    boolean h = HEART.matcher(d).find();
+                    boolean h = fromDiggLayout();
                     logOnce("hv-anim:" + d, "双击后动画开始：" + d + (h ? "（已挡掉）" : "") + " ← " + callers());
                     if (h) p.setResult(null);
                 } catch (Throwable ignored) {
@@ -264,7 +275,7 @@ final class CommentHook {
                     try {
                         if (!guardActive()) return;
                         String d = describe((View) p.thisObject);
-                        boolean h = HEART.matcher(d).find();
+                        boolean h = fromDiggLayout();
                         logOnce("hv-vanim:" + d, "双击后 View 动画：" + d + (h ? "（已挡掉）" : "") + " ← " + callers());
                         if (h) p.setResult(null);
                     } catch (Throwable ignored) {
@@ -293,8 +304,9 @@ final class CommentHook {
                             try {
                                 if (!guardActive()) return;
                                 String d = describe((View) p.thisObject);
-                                logOnce("hv-lottie:" + d, "双击后 Lottie 开始播放：" + d + "（已挡掉） ← " + callers());
-                                p.setResult(null);
+                                boolean h = fromDiggLayout();
+                                logOnce("hv-lottie:" + d, "双击后 Lottie 开始播放：" + d + (h ? "（已挡掉）" : "") + " ← " + callers());
+                                if (h) p.setResult(null);
                             } catch (Throwable ignored) {
                             }
                         }
@@ -318,6 +330,7 @@ final class CommentHook {
     static void tryHookDigg(ClassLoader cl) {
         if (cl == null) return;
         hookObserver(cl);
+        hookDiggLayout(cl);
         hookLottie(cl);
         if (diggHooked) {
             hookDiag(cl);
@@ -374,6 +387,49 @@ final class CommentHook {
      * 拦双击点赞的真正入口：双击后 FeedDiggPresenter$observeVM$2.LIZ 被调用，它负责发起点赞并创建 X.1DAj 刷新界面。
      * 只在“双击→评论”开着、且刚刚发生过双击（DTAP_GUARD_MS 内）时跳过它；其它时候（按钮点赞、切视频）原样放行。
      */
+    /**
+     * 双击红心的真正来源：common.widget.DiggLayout.LIZJ（方法名混淆，类名没混淆）。窗口内直接跳过它，红心就不会生成。
+     * 只拦 void / 基本类型返回值的重载；返回对象的重载只记不拦（返回 null 可能让调用方崩）。
+     */
+    private static void hookDiggLayout(ClassLoader cl) {
+        if (diggLayoutHooked || cl == null) return;
+        try {
+            Class<?> k = Class.forName(DIGG_LAYOUT, false, cl);
+            int n = 0;
+            StringBuilder sig = new StringBuilder();
+            for (Method m : k.getDeclaredMethods()) {
+                if (!m.getName().equals("LIZJ")) continue;
+                sig.append(m.getReturnType().getSimpleName()).append(java.util.Arrays.toString(m.getParameterTypes())).append(' ');
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam p) {
+                        try {
+                            if (!guardActive()) return;
+                            Class<?> rt = ((Method) p.method).getReturnType();
+                            if (rt == void.class || rt.isPrimitive()) {
+                                dtapGuardUntil = android.os.SystemClock.uptimeMillis() + DTAP_GUARD_MS; // 连点：每挡一次延长窗口
+                                logOnce("digg-layout", "已挡掉双击红心（DiggLayout.LIZJ）");
+                                p.setResult(defaultOf(rt));
+                            } else {
+                                logOnce("digg-layout-obj", "DiggLayout.LIZJ 返回对象，未拦：" + rt.getName());
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+                n++;
+            }
+            diggLayoutHooked = n > 0;
+            DanmakuHook.status(n > 0 ? "已挂接 DiggLayout#LIZJ（" + n + " 个：" + sig.toString().trim() + "）"
+                    : "DiggLayout 里没有叫 LIZJ 的方法：抖音版本变了，需要重新记录");
+        } catch (ClassNotFoundException e) {
+            // 类还没加载：下次回到前台再试
+        } catch (Throwable t) {
+            diggLayoutHooked = true;
+            DanmakuHook.status("挂接 DiggLayout 失败：" + t);
+        }
+    }
+
     private static void hookObserver(ClassLoader cl) {
         if (observerHooked || cl == null) return;
         try {
