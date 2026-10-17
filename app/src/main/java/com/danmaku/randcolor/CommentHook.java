@@ -79,6 +79,107 @@ final class CommentHook {
         } catch (Throwable t) {
             DanmakuHook.status("挂接 GestureDetector 失败：" + t);
         }
+        hookHeartViews();
+    }
+
+    // ------------------------------------------------------------ 双击红心动画
+
+    private static final java.util.regex.Pattern HEART = java.util.regex.Pattern.compile(
+            "heart|digg|like|praise|love|thumb|favor|burst|lottie", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** 类名 + 资源 id 名，用来判断是不是红心动画相关的 View。 */
+    private static String describe(View v) {
+        String d = v.getClass().getName();
+        try {
+            if (v.getId() != View.NO_ID && v.getResources() != null) d += "#" + v.getResources().getResourceEntryName(v.getId());
+        } catch (Throwable ignored) {
+        }
+        return d;
+    }
+
+    private static boolean guardActive() {
+        return DanmakuHook.cfg.dtapToComment && android.os.SystemClock.uptimeMillis() <= dtapGuardUntil;
+    }
+
+    /**
+     * 双击后的红心动画：双击后 DTAP_GUARD_MS 内，凡是“新加进界面 / 变成可见 / 开始播放”的红心类 View 一律挡掉。
+     * 同时把窗口内出现的所有新 View 的类名记到状态里（每个类 2 分钟一条），方便第一版没挡住时精确定位。
+     */
+    private static void hookHeartViews() {
+        try {
+            XposedBridge.hookMethod(ViewGroup.class.getDeclaredMethod("addView", View.class, int.class, ViewGroup.LayoutParams.class),
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam p) {
+                            try {
+                                if (!guardActive() || p.args == null || !(p.args[0] instanceof View)) return;
+                                String d = describe((View) p.args[0]);
+                                if (HEART.matcher(d).find()) {
+                                    logOnce("hv-add:" + d, "已挡掉双击红心（addView）：" + d + " ← " + callers());
+                                    p.setResult(null);
+                                } else {
+                                    logOnce("hv-seen:" + d, "双击后新增 View：" + d + " ← " + callers());
+                                }
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    });
+        } catch (Throwable t) {
+            DanmakuHook.status("挂接 ViewGroup.addView 失败：" + t);
+        }
+        try {
+            XposedBridge.hookMethod(View.class.getDeclaredMethod("setVisibility", int.class), new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        if (!guardActive() || p.args == null || ((Integer) p.args[0]) != View.VISIBLE) return;
+                        View v = (View) p.thisObject;
+                        String d = describe(v);
+                        if (HEART.matcher(d).find()) {
+                            logOnce("hv-vis:" + d, "已挡掉双击红心（setVisibility）：" + d + " ← " + callers());
+                            p.args[0] = View.INVISIBLE;
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            DanmakuHook.status("挂接 View.setVisibility 失败：" + t);
+        }
+    }
+
+    private static volatile boolean lottieHooked;
+
+    /** 红心很可能是 Lottie 动画：窗口内不让它开始播放。需要目标 App 的类加载器。 */
+    private static void hookLottie(ClassLoader cl) {
+        if (lottieHooked || cl == null) return;
+        try {
+            Class<?> k = Class.forName("com.airbnb.lottie.LottieAnimationView", false, cl);
+            int n = 0;
+            for (Method m : k.getDeclaredMethods()) {
+                if (!m.getName().equals("playAnimation") && !m.getName().equals("resumeAnimation")) continue;
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam p) {
+                        try {
+                            if (!guardActive()) return;
+                            String d = describe((View) p.thisObject);
+                            logOnce("hv-lottie:" + d, "双击后 Lottie 开始播放：" + d + (HEART.matcher(d).find() ? "（已挡掉）" : "") + " ← " + callers());
+                            if (HEART.matcher(d).find()) p.setResult(null);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+                n++;
+            }
+            lottieHooked = true;
+            DanmakuHook.status("已挂接 Lottie 播放（" + n + " 个方法）");
+        } catch (ClassNotFoundException e) {
+            // 没有这个类或还没加载：下次回到前台再试
+        } catch (Throwable t) {
+            lottieHooked = true;
+            DanmakuHook.status("挂接 Lottie 失败：" + t);
+        }
     }
 
     // ------------------------------------------------------------ 1) 右侧爱心按钮
@@ -87,6 +188,7 @@ final class CommentHook {
     static void tryHookDigg(ClassLoader cl) {
         if (cl == null) return;
         hookObserver(cl);
+        hookLottie(cl);
         if (diggHooked) {
             hookDiag(cl);
             return;
