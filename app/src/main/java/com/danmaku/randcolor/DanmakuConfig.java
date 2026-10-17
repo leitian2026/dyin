@@ -16,17 +16,10 @@ public final class DanmakuConfig {
     public int mode = 0;
     /** false = 每个文字对象固定一个颜色；true = 相同文字固定同一个颜色 */
     public boolean keyByText = false;
-    /** 首页顶部标签栏里要隐藏的标签文字（如 游戏、同城）。空 = 不隐藏。 */
-    public java.util.LinkedHashSet<String> hideTabs = new java.util.LinkedHashSet<>();
     /** 点右侧爱心按钮时，不点赞，改为打开评论。 */
     public boolean likeBtnToComment = false;
-    /** 双击视频时，不点赞，改为打开评论（实验：依赖抖音用 GestureDetector 处理双击）。 */
+    /** 双击视频时，不点赞、不出红心，改为打开评论。 */
     public boolean dtapToComment = false;
-
-    public String summary() {
-        return "enabled=" + enabled + " mode=" + (mode == 0 ? "鲜艳" : "任意") + " key=" + (keyByText ? "按文字" : "按对象") + " 隐藏标签=" + hideTabs.size()
-                + " 按钮点赞→评论=" + likeBtnToComment + " 双击→评论=" + dtapToComment;
-    }
 
     public String toText() {
         try {
@@ -36,7 +29,6 @@ public final class DanmakuConfig {
             p.setProperty("keyByText", String.valueOf(keyByText));
             p.setProperty("likeBtnToComment", String.valueOf(likeBtnToComment));
             p.setProperty("dtapToComment", String.valueOf(dtapToComment));
-            p.setProperty("hideTabs", String.join(",", hideTabs)); // 中文会被 Properties 自动转义存储，读回来自动还原
             ByteArrayOutputStream bo = new ByteArrayOutputStream();
             p.store(bo, null);
             return new String(bo.toByteArray(), StandardCharsets.ISO_8859_1);
@@ -71,7 +63,6 @@ public final class DanmakuConfig {
     private static void fill(DanmakuConfig c, Properties p) {
         c.enabled = Boolean.parseBoolean(p.getProperty("enabled", "true").trim());
         c.keyByText = Boolean.parseBoolean(p.getProperty("keyByText", "false").trim());
-        c.hideTabs.addAll(split(p.getProperty("hideTabs", "")));
         c.likeBtnToComment = Boolean.parseBoolean(p.getProperty("likeBtnToComment", "false").trim());
         c.dtapToComment = Boolean.parseBoolean(p.getProperty("dtapToComment", "false").trim());
         try {
