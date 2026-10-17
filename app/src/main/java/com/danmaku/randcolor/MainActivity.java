@@ -297,7 +297,7 @@ public class MainActivity extends Activity {
         if (out.contains("双击后点赞仍被触发")) sb.append("✗ 双击后点赞仍然被触发了：调用栈在下面“最近状态”里，把它发给我就能找到真正的点赞入口。\n");
         if (out.contains("里没有叫")) sb.append("✗ 点赞入口方法名对不上：抖音版本变了，需要重新记录。\n");
         String[] lines = out.trim().split("\n");
-        int from = Math.max(0, lines.length - 16);
+        int from = Math.max(0, lines.length - 30);
         sb.append("\n最近状态：\n");
         for (int i = from; i < lines.length; i++) sb.append(lines[i]).append('\n');
         return sb.toString();
