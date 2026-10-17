@@ -40,8 +40,17 @@ final class CommentHook {
     /** 点赞后刷新界面那一步（#316 / #545 都经过它）。只用来诊断：双击之后它又被调用，就把栈记下来，找真正的点赞入口。 */
     private static final String DIGG_UI_METHOD = "LJJLIIIJL";
 
+    /** 1.6 日志：双击后 FeedDiggPresenter$observeVM$2.LIZ 在 Handler 里被调用，它创建 X.1DAj 去执行点赞。类名没混淆，方法名混淆。 */
+    private static final String DIGG_OBSERVER = DIGG + "$observeVM$2";
+    private static final String DIGG_OBSERVER_METHOD = "LIZ";
+    /** 双击之后多长时间内，把点赞观察者的调用当作“双击点赞”拦掉（毫秒）。 */
+    private static final long DTAP_GUARD_MS = 1500;
+
     private static boolean installed;
     private static volatile boolean diggHooked;
+    private static volatile boolean observerHooked;
+    /** 在这个时间点之前，点赞观察者的调用一律拦掉（只在“双击→评论”开着时才会被设置）。 */
+    private static volatile long dtapGuardUntil;
     /** 最近一次识别到双击的时间（不管开关开没开），用来诊断。 */
     private static volatile long lastDtapAt;
     /** 最近一次我们接管双击并打开评论的时间；同一次双击里多个回调 / 多个监听只打开一次。 */
@@ -77,6 +86,7 @@ final class CommentHook {
     /** 需要目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到挂上。 */
     static void tryHookDigg(ClassLoader cl) {
         if (cl == null) return;
+        hookObserver(cl);
         if (diggHooked) {
             hookDiag(cl);
             return;
@@ -125,6 +135,42 @@ final class CommentHook {
         } catch (Throwable t) {
             diggHooked = true;
             DanmakuHook.status("挂接 FeedDiggPresenter 失败：" + t);
+        }
+    }
+
+    /**
+     * 拦双击点赞的真正入口：双击后 FeedDiggPresenter$observeVM$2.LIZ 被调用，它负责发起点赞并创建 X.1DAj 刷新界面。
+     * 只在“双击→评论”开着、且刚刚发生过双击（DTAP_GUARD_MS 内）时跳过它；其它时候（按钮点赞、切视频）原样放行。
+     */
+    private static void hookObserver(ClassLoader cl) {
+        if (observerHooked || cl == null) return;
+        try {
+            Class<?> k = Class.forName(DIGG_OBSERVER, false, cl);
+            int n = 0;
+            for (Method m : k.getDeclaredMethods()) {
+                if (!m.getName().equals(DIGG_OBSERVER_METHOD) || m.isBridge() || m.isSynthetic()) continue;
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam p) {
+                        try {
+                            if (!DanmakuHook.cfg.dtapToComment) return;
+                            if (android.os.SystemClock.uptimeMillis() > dtapGuardUntil) return;
+                            logOnce("guard", "已拦下双击点赞（FeedDiggPresenter$observeVM$2." + DIGG_OBSERVER_METHOD + "）");
+                            p.setResult(defaultOf(((Method) p.method).getReturnType()));
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+                n++;
+            }
+            observerHooked = n > 0;
+            DanmakuHook.status(n > 0 ? "已挂接双击点赞拦截（" + n + " 个方法）"
+                    : "observeVM$2 里没有叫 " + DIGG_OBSERVER_METHOD + " 的方法：抖音版本变了，需要用 TextRec 重新记录");
+        } catch (ClassNotFoundException e) {
+            // 类还没加载或这个版本没有：下次回到前台再试
+        } catch (Throwable t) {
+            observerHooked = true;
+            DanmakuHook.status("挂接 observeVM$2 失败：" + t);
         }
     }
 
@@ -259,6 +305,8 @@ final class CommentHook {
         // 不管开没开关都记一次：看哪个类的哪个回调处理了双击
         logOnce("tap:" + who, "双击监听被触发：" + who);
         if (!DanmakuHook.cfg.dtapToComment) return;
+        // 双击开着：不管后面能不能打开评论，先把点赞堵住（点赞观察者在 hookObserver 里按这个时间窗拦截）
+        dtapGuardUntil = now + DTAP_GUARD_MS;
         int action = -1;
         if (!isDoubleTap && p.args != null && p.args.length > 0 && p.args[0] instanceof MotionEvent) {
             action = ((MotionEvent) p.args[0]).getActionMasked();
@@ -273,17 +321,16 @@ final class CommentHook {
             }
             return;
         }
-        // 双击开始（onDoubleTap，或 onDoubleTapEvent 的 DOWN）：同一次双击里已经有别的回调打开过评论就只拦截
+        // 双击开始（onDoubleTap，或 onDoubleTapEvent 的 DOWN）：同一次双击里已经有别的回调处理过就只拦截
         if (now - lastOpenAt < 800) {
             dtapBlocking = true;
             p.setResult(Boolean.TRUE);
             return;
         }
-        if (openComments()) {
-            lastOpenAt = now;
-            dtapBlocking = true;
-            p.setResult(Boolean.TRUE); // 返回 true = 已处理，原来的点赞逻辑不再执行
-        }
+        lastOpenAt = now;
+        dtapBlocking = true;
+        p.setResult(Boolean.TRUE); // 返回 true = 已处理，原来的点赞逻辑不再执行
+        openComments(); // 找不到评论按钮也不放行点赞：双击不点赞
     }
 
     // ------------------------------------------------------------ 打开评论
