@@ -76,7 +76,11 @@ final class CommentHook {
 
     /** 需要目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到挂上。 */
     static void tryHookDigg(ClassLoader cl) {
-        if (diggHooked || cl == null) return;
+        if (cl == null) return;
+        if (diggHooked) {
+            hookDiag(cl);
+            return;
+        }
         try {
             Class<?> k = Class.forName(DIGG, false, cl);
             int n = 0;
@@ -113,6 +117,7 @@ final class CommentHook {
                 });
             }
             diggHooked = true;
+            hookDiag(cl);
             DanmakuHook.status(n > 0 ? "已挂接 FeedDiggPresenter#" + DIGG_CLICK_METHOD + "（" + n + " 个重载）"
                     : "FeedDiggPresenter 里没有叫 " + DIGG_CLICK_METHOD + " 的方法：抖音版本变了，需要用 TextRec 重新记录点赞入口");
         } catch (ClassNotFoundException e) {
@@ -120,6 +125,56 @@ final class CommentHook {
         } catch (Throwable t) {
             diggHooked = true;
             DanmakuHook.status("挂接 FeedDiggPresenter 失败：" + t);
+        }
+    }
+
+    private static volatile boolean diagHooked;
+
+    /**
+     * 诊断（不改任何行为）：1.4 的日志显示，拦住 onDoubleTap / onDoubleTapEvent 之后点赞仍然发生了——
+     * LJJLIIIJL 是被 Handler 里的 X.1DAj.run 和 EventBus 的 subscribeDiggUpdateEvent 调用的，栈里看不到是谁发起的。
+     * 这里记两样东西：谁发出了和点赞有关的 EventBus 事件；X.1DAj 是在哪里创建的。
+     */
+    private static void hookDiag(ClassLoader cl) {
+        if (diagHooked || cl == null) return;
+        try {
+            Class<?> eb = Class.forName("org.greenrobot.eventbus.EventBus", false, cl);
+            XposedBridge.hookMethod(eb.getDeclaredMethod("post", Object.class), new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        if (p.args == null || p.args.length == 0 || p.args[0] == null) return;
+                        String n = p.args[0].getClass().getName();
+                        String l = n.toLowerCase(java.util.Locale.ROOT);
+                        if (!l.contains("digg") && !l.contains("like")) return;
+                        String c = callers();
+                        logOnce("evt:" + n + c.hashCode(), "点赞事件 " + n + " 由谁发出：" + c);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            });
+        } catch (ClassNotFoundException e) {
+            return; // EventBus 还没加载：下次回到前台再试
+        } catch (Throwable t) {
+            DanmakuHook.status("挂接 EventBus.post 失败：" + t);
+        }
+        diagHooked = true;
+        try {
+            Class<?> k = Class.forName("X.1DAj", false, cl);
+            for (Constructor<?> c : k.getDeclaredConstructors()) {
+                XposedBridge.hookMethod(c, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam p) {
+                        try {
+                            String s = callers();
+                            logOnce("mk:" + s.hashCode(), "X.1DAj 被创建：" + s);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+            }
+        } catch (Throwable t) {
+            DanmakuHook.status("找不到 X.1DAj（抖音版本变了？）：" + t);
         }
     }
 
@@ -141,6 +196,7 @@ final class CommentHook {
         if (!(l instanceof GestureDetector.OnDoubleTapListener)) return;
         Class<?> k = l.getClass();
         if (!TAP_HOOKED.add(k)) return;
+        hookGestureLog(k);
         // 系统在第二次点按时依次回调：onDoubleTap(第一次点按的 DOWN) → onDoubleTapEvent(第二次的 DOWN) → … → onDoubleTapEvent(UP)。
         // 点赞可能写在其中任何一个里，所以两个都要接管。
         try {
@@ -172,6 +228,27 @@ final class CommentHook {
                 });
             }
         } catch (Throwable ignored) {
+        }
+    }
+
+    /** 只记不拦：这个监听类还实现了 onSingleTapUp / onSingleTapConfirmed 的话，哪个被触发了。 */
+    private static void hookGestureLog(Class<?> k) {
+        for (final String name : new String[]{"onSingleTapUp", "onSingleTapConfirmed"}) {
+            try {
+                Method m = k.getMethod(name, MotionEvent.class);
+                if (m.getDeclaringClass() == GestureDetector.SimpleOnGestureListener.class) continue;
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam p) {
+                        try {
+                            String who = p.method.getDeclaringClass().getName() + "#" + name;
+                            logOnce("g:" + who, "手势回调：" + who);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+            } catch (Throwable ignored) {
+            }
         }
     }
 
@@ -299,17 +376,18 @@ final class CommentHook {
         return false;
     }
 
-    /** 当前调用栈里最近的 12 个 App 帧（跳过 Xposed、java、android 框架），写进状态文件，用来定位点赞入口。 */
+    /** 当前调用栈里最近的 14 个帧（完整类名；跳过 LSPosed 的钩子帧、默认包下的代理类、java.* 和我们自己），用来定位点赞入口。 */
     private static String callers() {
         StringBuilder sb = new StringBuilder();
         int n = 0;
         for (StackTraceElement e : new Throwable().getStackTrace()) {
             String c = e.getClassName();
-            if (c.startsWith("de.robv.") || c.startsWith("LSPHooker") || c.startsWith("java.") || c.startsWith("com.danmaku.")
-                    || c.startsWith("org.lsposed.") || c.startsWith("J.")) continue;
+            if (c.indexOf('.') < 0 || c.startsWith("de.robv.") || c.startsWith("org.lsposed.") || c.startsWith("com.danmaku.")
+                    || c.startsWith("java.")) continue;
+            if (c.startsWith("com.ss.android.ugc.aweme.")) c = c.substring(25);
             if (n > 0) sb.append(" < ");
-            sb.append(c.substring(c.lastIndexOf('.') + 1)).append('.').append(e.getMethodName());
-            if (++n >= 12) break;
+            sb.append(c).append('.').append(e.getMethodName());
+            if (++n >= 14) break;
         }
         return sb.toString();
     }
