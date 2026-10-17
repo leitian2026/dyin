@@ -61,3 +61,7 @@
 ## 1.8：挡掉双击红心动画
 - 「双击→评论」开着时，双击后 1.5 秒内：红心类 View（类名 / id 含 heart、digg、like、praise、love、lottie 等）不让加入界面、不让变成可见，Lottie 不让播放。
 - 同时把窗口内新增的 View 类名记进状态（「双击后新增 View」），第一版没挡住时据此精确定位。
+
+## 1.9：红心动画诊断
+- 1.8 日志：双击后新增的 View 全是 LayoutInflater 预加载的 ViewStub / 布局，不是红心；点赞拦截已生效。
+- addView 不再记布局预加载；新增记录「ViewStub 展开」「属性动画开始（含目标 View）」「帧动画」「View 动画」「Lottie 播放」，名字像红心的直接挡掉。
