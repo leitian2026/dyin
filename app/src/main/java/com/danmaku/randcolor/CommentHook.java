@@ -80,6 +80,7 @@ final class CommentHook {
             DanmakuHook.status("挂接 GestureDetector 失败：" + t);
         }
         hookHeartViews();
+        hookHeartAnimations();
     }
 
     // ------------------------------------------------------------ 双击红心动画
@@ -117,7 +118,7 @@ final class CommentHook {
                                 if (HEART.matcher(d).find()) {
                                     logOnce("hv-add:" + d, "已挡掉双击红心（addView）：" + d + " ← " + callers());
                                     p.setResult(null);
-                                } else {
+                                } else if (!inInflate()) { // 布局预加载（LayoutInflater）不是红心，不记
                                     logOnce("hv-seen:" + d, "双击后新增 View：" + d + " ← " + callers());
                                 }
                             } catch (Throwable ignored) {
@@ -145,6 +146,80 @@ final class CommentHook {
             });
         } catch (Throwable t) {
             DanmakuHook.status("挂接 View.setVisibility 失败：" + t);
+        }
+    }
+
+    private static boolean inInflate() {
+        for (StackTraceElement e : new Throwable().getStackTrace()) {
+            if (e.getClassName().equals("android.view.LayoutInflater")) return true;
+        }
+        return false;
+    }
+
+    /** 红心很可能是：ViewStub 第一次展开 / 属性动画 / 帧动画 / View 动画。窗口内都记下来（记下“谁在动”），名字像红心的直接挡。 */
+    private static void hookHeartAnimations() {
+        try {
+            XposedBridge.hookMethod(android.view.ViewStub.class.getDeclaredMethod("inflate"), new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam p) {
+                    try {
+                        if (!guardActive() || !(p.getResult() instanceof View)) return;
+                        View v = (View) p.getResult();
+                        String d = describe(v);
+                        boolean h = HEART.matcher(d).find();
+                        logOnce("hv-stub:" + d, "双击后 ViewStub 展开：" + d + (h ? "（已隐藏）" : "") + " ← " + callers());
+                        if (h) v.setVisibility(View.GONE);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            DanmakuHook.status("挂接 ViewStub.inflate 失败：" + t);
+        }
+        XC_MethodHook animHook = new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam p) {
+                try {
+                    if (!guardActive()) return;
+                    Object t = p.thisObject;
+                    String d = t.getClass().getName();
+                    if (t instanceof android.animation.ObjectAnimator) {
+                        Object tg = ((android.animation.ObjectAnimator) t).getTarget();
+                        if (tg instanceof View) d += " → " + describe((View) tg);
+                        else if (tg != null) d += " → " + tg.getClass().getName();
+                    }
+                    boolean h = HEART.matcher(d).find();
+                    logOnce("hv-anim:" + d, "双击后动画开始：" + d + (h ? "（已挡掉）" : "") + " ← " + callers());
+                    if (h) p.setResult(null);
+                } catch (Throwable ignored) {
+                }
+            }
+        };
+        try {
+            XposedBridge.hookMethod(android.animation.ValueAnimator.class.getDeclaredMethod("start"), animHook);
+            XposedBridge.hookMethod(android.animation.ObjectAnimator.class.getDeclaredMethod("start"), animHook);
+        } catch (Throwable t) {
+            DanmakuHook.status("挂接属性动画失败：" + t);
+        }
+        try {
+            XposedBridge.hookMethod(android.graphics.drawable.AnimationDrawable.class.getDeclaredMethod("start"), animHook);
+        } catch (Throwable ignored) {
+        }
+        try {
+            XposedBridge.hookMethod(View.class.getDeclaredMethod("startAnimation", android.view.animation.Animation.class), new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        if (!guardActive()) return;
+                        String d = describe((View) p.thisObject);
+                        boolean h = HEART.matcher(d).find();
+                        logOnce("hv-vanim:" + d, "双击后 View 动画：" + d + (h ? "（已挡掉）" : "") + " ← " + callers());
+                        if (h) p.setResult(null);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            });
+        } catch (Throwable ignored) {
         }
     }
 
