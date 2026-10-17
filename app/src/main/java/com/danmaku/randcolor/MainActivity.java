@@ -16,7 +16,10 @@ import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class MainActivity extends Activity {
     static final String PREFS = "ui";
@@ -27,12 +30,16 @@ public class MainActivity extends Activity {
     private RadioGroup rgMode, rgKey;
     private RadioButton rbVivid, rbAny, rbObj, rbText;
     private TextView tvStatus;
-    private Button btnPush, btnCheck;
+    private Button btnPush, btnCheck, btnTabs;
+    private LinearLayout tabBox;
+    private final ArrayList<CheckBox> tabChecks = new ArrayList<>();
+    /** 抖音首页顶部标签的默认列表（来自实测，从左到右）；点「读取标签」后以抖音里实际的为准。 */
+    private static final String DEFAULT_TABS = "热点\n经验\n游戏\n少儿\n同城\n精选\n团购\n免费看剧\n商城\n短剧\n直播\n关注\n推荐";
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        setTitle("弹幕随机色");
+        setTitle("弹幕随机色 / 首页标签");
         ScrollView sv = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -75,6 +82,16 @@ public class MainActivity extends Activity {
         rgKey.addView(rbText);
         root.addView(rgKey);
 
+        root.addView(label("首页顶部标签（勾选 = 隐藏）"));
+        root.addView(text("只隐藏标签栏上的这一项，首页左右滑动仍然会切到对应页面。勾选后点下面的「保存并推送配置」，抖音回到前台生效。", 12));
+        tabBox = new LinearLayout(this);
+        tabBox.setOrientation(LinearLayout.VERTICAL);
+        root.addView(tabBox);
+        btnTabs = new Button(this);
+        btnTabs.setText("读取抖音当前的标签（root）");
+        btnTabs.setOnClickListener(v -> readTabs());
+        root.addView(btnTabs);
+
         btnPush = new Button(this);
         btnPush.setText("保存并推送配置");
         btnPush.setOnClickListener(v -> save());
@@ -100,6 +117,67 @@ public class MainActivity extends Activity {
         cbEnabled.setChecked(c.enabled);
         (c.mode == 1 ? rbAny : rbVivid).setChecked(true);
         (c.keyByText ? rbText : rbObj).setChecked(true);
+        buildTabs(DanmakuConfig.split(sp.getString("tabs", DEFAULT_TABS)), c.hideTabs);
+    }
+
+    /** 每行 3 个复选框。labels = 全部标签（屏幕顺序），hide = 当前勾选（隐藏）的。 */
+    private void buildTabs(List<String> labels, Set<String> hide) {
+        tabBox.removeAllViews();
+        tabChecks.clear();
+        LinearLayout row = null;
+        for (int i = 0; i < labels.size(); i++) {
+            if (i % 3 == 0) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                tabBox.addView(row);
+            }
+            CheckBox cb = new CheckBox(this);
+            cb.setText(labels.get(i));
+            cb.setTextSize(14);
+            cb.setChecked(hide.contains(labels.get(i)));
+            row.addView(cb, new LinearLayout.LayoutParams(0, -2, 1f));
+            tabChecks.add(cb);
+        }
+    }
+
+    private List<String> tabLabels() {
+        ArrayList<String> l = new ArrayList<>();
+        for (CheckBox cb : tabChecks) l.add(cb.getText().toString());
+        return l;
+    }
+
+    private void readTabs() {
+        final List<String> list = DanmakuConfig.split(etPkg.getText().toString());
+        if (list.isEmpty() || !RootShell.validPkg(list.get(0))) {
+            tvStatus.setText("请先填目标包名");
+            return;
+        }
+        final String pkg = list.get(0);
+        btnTabs.setEnabled(false);
+        tvStatus.setText("正在读取标签…");
+        new Thread(() -> {
+            final RootShell.Result r = RootShell.readTabs(pkg);
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                btnTabs.setEnabled(true);
+                if (r.out.contains("__NOPKG__")) {
+                    tvStatus.setText(RootShell.nopkgMsg(r.out));
+                    return;
+                }
+                List<String> found = DanmakuConfig.split(r.out);
+                if (found.isEmpty()) {
+                    tvStatus.setText("还没读到标签：确认模块已启用，强杀抖音重开，停在首页等顶部标签栏出现后再点。");
+                    return;
+                }
+                // 以抖音里的实际顺序为准；已勾选但这次没看到的（比如已经被隐藏）也保留，免得没法取消
+                Set<String> checked = new HashSet<>();
+                for (CheckBox cb : tabChecks) if (cb.isChecked()) checked.add(cb.getText().toString());
+                ArrayList<String> all = new ArrayList<>(found);
+                for (String s : tabLabels()) if (checked.contains(s) && !all.contains(s)) all.add(s);
+                buildTabs(all, checked);
+                tvStatus.setText("已读到 " + found.size() + " 个标签，勾选要隐藏的，再点「保存并推送配置」。");
+            });
+        }).start();
     }
 
     private DanmakuConfig read() {
@@ -107,13 +185,15 @@ public class MainActivity extends Activity {
         c.enabled = cbEnabled.isChecked();
         c.mode = rbAny.isChecked() ? 1 : 0;
         c.keyByText = rbText.isChecked();
+        for (CheckBox cb : tabChecks) if (cb.isChecked()) c.hideTabs.add(cb.getText().toString());
         return c;
     }
 
     private void save() {
         final String cfgText = read().toText();
         final String pkgs = etPkg.getText().toString().trim();
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("cfg", cfgText).putString("pkg", pkgs).apply();
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("cfg", cfgText).putString("pkg", pkgs)
+                .putString("tabs", String.join("\n", tabLabels())).apply();
         final List<String> list = DanmakuConfig.split(pkgs);
         if (list.isEmpty()) {
             tvStatus.setText("请先填目标包名");
