@@ -128,7 +128,7 @@ public class MainActivity extends Activity {
         like.addView(switchRow("点右侧爱心按钮时打开评论", "不再点赞（也不会取消赞），改为点开这个视频的评论", swLikeBtn));
         like.addView(divider());
         swDtap = new Switch(this);
-        like.addView(switchRow("双击视频时打开评论（实验）", "双击不再点赞。依赖抖音用系统手势识别双击，不一定生效；点「检查状态」能看到有没有识别到", swDtap));
+        like.addView(switchRow("双击视频时打开评论", "双击不再点赞，改为打开评论", swDtap));
         TextView ld = tv("找不到当前视频的评论按钮时不会拦截，点赞照常。", 13, cSub, false);
         ld.setPadding(0, dp(12), 0, 0);
         like.addView(ld);
@@ -294,6 +294,7 @@ public class MainActivity extends Activity {
             sb.append("双击：识别到 ").append(taps.size()).append(" 个双击回调：\n");
             for (String t : taps) sb.append("  · ").append(t).append('\n');
         }
+        if (out.contains("已拦下双击点赞")) sb.append("✓ 双击点赞已被拦下。\n");
         if (out.contains("双击后点赞仍被触发")) sb.append("✗ 双击后点赞仍然被触发了：调用栈在下面“最近状态”里，把它发给我就能找到真正的点赞入口。\n");
         if (out.contains("里没有叫")) sb.append("✗ 点赞入口方法名对不上：抖音版本变了，需要重新记录。\n");
         String[] lines = out.trim().split("\n");
