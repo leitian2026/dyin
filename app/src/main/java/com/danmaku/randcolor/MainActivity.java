@@ -1,19 +1,24 @@
 package com.danmaku.randcolor;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -21,171 +26,163 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+/** 设置页：卡片 + 开关行 + 分段按钮 + 标签胶囊 + 底部固定操作栏。纯框架控件，不依赖任何第三方库；跟随系统深浅色。 */
 public class MainActivity extends Activity {
     static final String PREFS = "ui";
     static final String DEFAULT_PKG = "com.ss.android.ugc.aweme";
+    /** 抖音首页顶部标签的默认列表（来自实测，从左到右）；点「读取抖音当前的标签」后以抖音里实际的为准。 */
+    private static final String DEFAULT_TABS = "热点\n经验\n游戏\n少儿\n同城\n精选\n团购\n免费看剧\n商城\n短剧\n直播\n关注\n推荐";
+
+    // 配色（浅色 / 深色）
+    private boolean dark;
+    private int cBg, cCard, cStroke, cText, cSub, cPrimary, cPrimarySoft, cField;
 
     private EditText etPkg;
-    private CheckBox cbEnabled;
-    private RadioGroup rgMode, rgKey;
-    private RadioButton rbVivid, rbAny, rbObj, rbText;
-    private TextView tvStatus;
-    private Button btnPush, btnCheck, btnTabs;
-    private LinearLayout tabBox;
-    private final ArrayList<CheckBox> tabChecks = new ArrayList<>();
-    /** 抖音首页顶部标签的默认列表（来自实测，从左到右）；点「读取标签」后以抖音里实际的为准。 */
-    private static final String DEFAULT_TABS = "热点\n经验\n游戏\n少儿\n同城\n精选\n团购\n免费看剧\n商城\n短剧\n直播\n关注\n推荐";
+    private Switch swEnabled;
+    private LinearLayout segMode, segKey, statusCard;
+    private Flow tabFlow;
+    private final ArrayList<TextView> chips = new ArrayList<>();
+    private TextView tvStatus, tvTabCount, btnPush, btnCheck, btnReadTabs;
+    private ScrollView scroll;
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        setTitle("弹幕随机色 / 首页标签");
-        ScrollView sv = new ScrollView(this);
+        setTitle("弹幕随机色");
+        dark = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        initPalette();
+        styleSystemBars();
+
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setBackgroundColor(cBg);
+
+        scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(16);
-        root.setPadding(pad, pad, pad, pad);
-        sv.addView(root, new ViewGroup.LayoutParams(-1, -2));
-        setContentView(sv);
+        root.setPadding(dp(16), dp(20), dp(16), dp(28));
+        scroll.addView(root, new ViewGroup.LayoutParams(-1, -2));
+        page.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+        page.addView(bottomBar(), new LinearLayout.LayoutParams(-1, -2));
+        setContentView(page);
 
-        root.addView(text("使用步骤：\n"
-                + "1. LSPosed 里启用本模块，作用域勾选抖音，然后强杀抖音重新打开。\n"
-                + "2. 下面选好样式，点「保存并推送配置」（需要 root 授权）。不推送也行：默认就是开启 + 鲜艳随机。\n"
-                + "3. 去看有弹幕的视频 / 发一条弹幕。\n"
-                + "4. 没效果就点「检查状态」，按提示排查。", 13));
+        // ---- 标题
+        TextView title = tv("弹幕随机色", 30, cText, true);
+        title.setPadding(dp(4), 0, 0, 0);
+        root.addView(title);
+        TextView sub = tv("抖音弹幕随机颜色 · 隐藏首页顶部标签", 14, cSub, false);
+        sub.setPadding(dp(4), dp(2), 0, dp(14));
+        root.addView(sub);
 
-        root.addView(label("目标 App 包名"));
-        etPkg = new EditText(this);
-        etPkg.setSingleLine(true);
-        etPkg.setTextSize(14);
-        etPkg.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        root.addView(etPkg);
+        // ---- 怎么用
+        LinearLayout how = card();
+        how.addView(tv("怎么用", 20, cText, true));
+        TextView pre = tv("前提：已在 LSPosed 里启用本模块，并在作用域勾选抖音。", 14, cSub, false);
+        pre.setPadding(0, dp(4), 0, dp(14));
+        how.addView(pre);
+        how.addView(step(1, "启用并重开抖音", "LSPosed 里启用模块、勾选抖音，然后强杀抖音再打开（只需做一次）"));
+        how.addView(step(2, "调整下面的设置", "选好弹幕颜色，点选要隐藏的首页标签"));
+        how.addView(step(3, "点下方「保存并应用」", "把设置推送给抖音（需要 root）。抖音回到前台约 2 秒内生效，不用重启"));
+        TextView hint = tv("没效果？点下方「检查状态」，会告诉你卡在哪一步。", 13, cSub, false);
+        hint.setPadding(0, dp(2), 0, 0);
+        how.addView(hint);
+        root.addView(how, cardLp());
 
-        cbEnabled = new CheckBox(this);
-        cbEnabled.setText("启用随机弹幕颜色");
-        cbEnabled.setTextSize(15);
-        root.addView(cbEnabled);
+        // ---- 目标 App
+        root.addView(section("目标 App"));
+        LinearLayout target = card();
+        target.addView(tv("包名", 17, cText, true));
+        TextView pd = tv("要作用的 App，多个包名用逗号分隔，默认是抖音。", 13, cSub, false);
+        pd.setPadding(0, dp(2), 0, dp(10));
+        target.addView(pd);
+        etPkg = field();
+        target.addView(etPkg);
+        target.addView(divider());
+        swEnabled = new Switch(this);
+        target.addView(switchRow("启用弹幕随机色", "关闭后弹幕恢复原本的颜色", swEnabled));
+        root.addView(target, cardLp());
 
-        root.addView(label("颜色风格"));
-        rgMode = new RadioGroup(this);
-        rbVivid = radio("鲜艳（高饱和、亮色，看得清）");
-        rbAny = radio("任意（含浅色、粉彩，更杂）");
-        rgMode.addView(rbVivid);
-        rgMode.addView(rbAny);
-        root.addView(rgMode);
+        // ---- 弹幕颜色
+        root.addView(section("弹幕颜色"));
+        LinearLayout colors = card();
+        colors.addView(tv("颜色风格", 17, cText, true));
+        TextView d1 = tv("鲜艳：高饱和亮色，看得清；任意：含浅色、粉彩，更杂。", 13, cSub, false);
+        d1.setPadding(0, dp(2), 0, dp(10));
+        colors.addView(d1);
+        segMode = segmented("鲜艳", "任意");
+        colors.addView(segMode);
+        colors.addView(divider());
+        colors.addView(tv("同一条弹幕怎么固定颜色", 17, cText, true));
+        TextView d2 = tv("弹幕滚动时每帧都在重绘，必须固定，否则会闪。推荐按弹幕对象；如果会闪，换成按文字内容。", 13, cSub, false);
+        d2.setPadding(0, dp(2), 0, dp(10));
+        colors.addView(d2);
+        segKey = segmented("按弹幕对象（推荐）", "按文字内容");
+        colors.addView(segKey);
+        root.addView(colors, cardLp());
 
-        root.addView(label("同一条弹幕如何固定颜色（弹幕滚动每帧都在重绘，必须固定，否则会闪）"));
-        rgKey = new RadioGroup(this);
-        rbObj = radio("按弹幕对象（每条都不同，推荐）");
-        rbText = radio("按文字内容（相同文字同色；如果上面那种会闪就选这个）");
-        rgKey.addView(rbObj);
-        rgKey.addView(rbText);
-        root.addView(rgKey);
+        // ---- 首页顶部标签
+        root.addView(section("首页顶部标签"));
+        LinearLayout tabs = card();
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        head.addView(tv("要隐藏的标签", 17, cText, true), new LinearLayout.LayoutParams(0, -2, 1f));
+        tvTabCount = tv("", 14, cPrimary, true);
+        head.addView(tvTabCount);
+        tabs.addView(head);
+        TextView td = tv("点一下切换，蓝色 = 隐藏。只隐藏标签栏上的这一项，首页左右滑动仍会切到对应页面。", 13, cSub, false);
+        td.setPadding(0, dp(2), 0, dp(12));
+        tabs.addView(td);
+        tabFlow = new Flow(this, dp(8), dp(8));
+        tabs.addView(tabFlow, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout acts = new LinearLayout(this);
+        acts.setOrientation(LinearLayout.HORIZONTAL);
+        acts.setPadding(0, dp(10), 0, 0);
+        btnReadTabs = textButton("读取抖音当前的标签", v -> readTabs());
+        acts.addView(btnReadTabs);
+        TextView clear = textButton("全部取消", v -> {
+            for (TextView c : chips) styleChip(c, false);
+            updateTabCount();
+        });
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, -2);
+        clp.leftMargin = dp(8);
+        acts.addView(clear, clp);
+        tabs.addView(acts);
+        root.addView(tabs, cardLp());
 
-        root.addView(label("首页顶部标签（勾选 = 隐藏）"));
-        root.addView(text("只隐藏标签栏上的这一项，首页左右滑动仍然会切到对应页面。勾选后点下面的「保存并推送配置」，抖音回到前台生效。", 12));
-        tabBox = new LinearLayout(this);
-        tabBox.setOrientation(LinearLayout.VERTICAL);
-        root.addView(tabBox);
-        btnTabs = new Button(this);
-        btnTabs.setText("读取抖音当前的标签（root）");
-        btnTabs.setOnClickListener(v -> readTabs());
-        root.addView(btnTabs);
-
-        btnPush = new Button(this);
-        btnPush.setText("保存并推送配置");
-        btnPush.setOnClickListener(v -> save());
-        root.addView(btnPush);
-
-        btnCheck = new Button(this);
-        btnCheck.setText("检查状态");
-        btnCheck.setOnClickListener(v -> check());
-        root.addView(btnCheck);
-
-        tvStatus = text("", 13);
+        // ---- 状态（有内容才显示）
+        statusCard = new LinearLayout(this);
+        statusCard.setOrientation(LinearLayout.VERTICAL);
+        statusCard.setPadding(dp(18), dp(14), dp(18), dp(14));
+        tvStatus = tv("", 13, cText, false);
         tvStatus.setTypeface(Typeface.MONOSPACE);
         tvStatus.setTextIsSelectable(true);
-        root.addView(tvStatus);
+        statusCard.addView(tvStatus);
+        statusCard.setVisibility(View.GONE);
+        root.addView(statusCard, cardLp());
 
         load();
     }
+
+    // ------------------------------------------------------------ 读写配置
 
     private void load() {
         SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
         etPkg.setText(sp.getString("pkg", DEFAULT_PKG));
         DanmakuConfig c = DanmakuConfig.fromText(sp.getString("cfg", ""));
-        cbEnabled.setChecked(c.enabled);
-        (c.mode == 1 ? rbAny : rbVivid).setChecked(true);
-        (c.keyByText ? rbText : rbObj).setChecked(true);
+        swEnabled.setChecked(c.enabled);
+        setSeg(segMode, c.mode == 1 ? 1 : 0);
+        setSeg(segKey, c.keyByText ? 1 : 0);
         buildTabs(DanmakuConfig.split(sp.getString("tabs", DEFAULT_TABS)), c.hideTabs);
-    }
-
-    /** 每行 3 个复选框。labels = 全部标签（屏幕顺序），hide = 当前勾选（隐藏）的。 */
-    private void buildTabs(List<String> labels, Set<String> hide) {
-        tabBox.removeAllViews();
-        tabChecks.clear();
-        LinearLayout row = null;
-        for (int i = 0; i < labels.size(); i++) {
-            if (i % 3 == 0) {
-                row = new LinearLayout(this);
-                row.setOrientation(LinearLayout.HORIZONTAL);
-                tabBox.addView(row);
-            }
-            CheckBox cb = new CheckBox(this);
-            cb.setText(labels.get(i));
-            cb.setTextSize(14);
-            cb.setChecked(hide.contains(labels.get(i)));
-            row.addView(cb, new LinearLayout.LayoutParams(0, -2, 1f));
-            tabChecks.add(cb);
-        }
-    }
-
-    private List<String> tabLabels() {
-        ArrayList<String> l = new ArrayList<>();
-        for (CheckBox cb : tabChecks) l.add(cb.getText().toString());
-        return l;
-    }
-
-    private void readTabs() {
-        final List<String> list = DanmakuConfig.split(etPkg.getText().toString());
-        if (list.isEmpty() || !RootShell.validPkg(list.get(0))) {
-            tvStatus.setText("请先填目标包名");
-            return;
-        }
-        final String pkg = list.get(0);
-        btnTabs.setEnabled(false);
-        tvStatus.setText("正在读取标签…");
-        new Thread(() -> {
-            final RootShell.Result r = RootShell.readTabs(pkg);
-            runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) return;
-                btnTabs.setEnabled(true);
-                if (r.out.contains("__NOPKG__")) {
-                    tvStatus.setText(RootShell.nopkgMsg(r.out));
-                    return;
-                }
-                List<String> found = DanmakuConfig.split(r.out);
-                if (found.isEmpty()) {
-                    tvStatus.setText("还没读到标签：确认模块已启用，强杀抖音重开，停在首页等顶部标签栏出现后再点。");
-                    return;
-                }
-                // 以抖音里的实际顺序为准；已勾选但这次没看到的（比如已经被隐藏）也保留，免得没法取消
-                Set<String> checked = new HashSet<>();
-                for (CheckBox cb : tabChecks) if (cb.isChecked()) checked.add(cb.getText().toString());
-                ArrayList<String> all = new ArrayList<>(found);
-                for (String s : tabLabels()) if (checked.contains(s) && !all.contains(s)) all.add(s);
-                buildTabs(all, checked);
-                tvStatus.setText("已读到 " + found.size() + " 个标签，勾选要隐藏的，再点「保存并推送配置」。");
-            });
-        }).start();
     }
 
     private DanmakuConfig read() {
         DanmakuConfig c = new DanmakuConfig();
-        c.enabled = cbEnabled.isChecked();
-        c.mode = rbAny.isChecked() ? 1 : 0;
-        c.keyByText = rbText.isChecked();
-        for (CheckBox cb : tabChecks) if (cb.isChecked()) c.hideTabs.add(cb.getText().toString());
+        c.enabled = swEnabled.isChecked();
+        c.mode = segIndex(segMode) == 1 ? 1 : 0;
+        c.keyByText = segIndex(segKey) == 1;
+        for (TextView t : chips) if (t.isSelected()) c.hideTabs.add(t.getText().toString());
         return c;
     }
 
@@ -196,11 +193,11 @@ public class MainActivity extends Activity {
                 .putString("tabs", String.join("\n", tabLabels())).apply();
         final List<String> list = DanmakuConfig.split(pkgs);
         if (list.isEmpty()) {
-            tvStatus.setText("请先填目标包名");
+            showStatus("请先填目标包名", 2);
             return;
         }
-        btnPush.setEnabled(false);
-        tvStatus.setText("正在推送…（首次会弹出 root 授权，请允许）");
+        setBusy(btnPush, true, "正在推送…");
+        showStatus("正在推送…（首次会弹出 root 授权，请允许）", 0);
         new Thread(() -> {
             final StringBuilder sb = new StringBuilder();
             for (String pkg : list) {
@@ -216,8 +213,8 @@ public class MainActivity extends Activity {
             sb.append("\n抖音回到前台后约 2 秒内生效，不用重启。抖音清除数据/重装后需要重新推送（不推送则用默认：开启+鲜艳）。");
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
-                btnPush.setEnabled(true);
-                tvStatus.setText(sb.toString());
+                setBusy(btnPush, false, "保存并应用");
+                showStatus(sb.toString(), sb.indexOf("✗") >= 0 ? 2 : 1);
             });
         }).start();
     }
@@ -225,11 +222,11 @@ public class MainActivity extends Activity {
     private void check() {
         final List<String> list = DanmakuConfig.split(etPkg.getText().toString());
         if (list.isEmpty()) {
-            tvStatus.setText("请先填目标包名");
+            showStatus("请先填目标包名", 2);
             return;
         }
-        btnCheck.setEnabled(false);
-        tvStatus.setText("正在读取状态…");
+        setBusy(btnCheck, true, "读取中…");
+        showStatus("正在读取状态…", 0);
         new Thread(() -> {
             final StringBuilder sb = new StringBuilder();
             for (String pkg : list) {
@@ -249,8 +246,9 @@ public class MainActivity extends Activity {
             }
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
-                btnCheck.setEnabled(true);
-                tvStatus.setText(sb.toString());
+                setBusy(btnCheck, false, "检查状态");
+                String s = sb.toString();
+                showStatus(s, s.contains("✓") ? 1 : (s.contains("✗") || s.contains("失败") ? 2 : 0));
             });
         }).start();
     }
@@ -274,31 +272,366 @@ public class MainActivity extends Activity {
         return sb.toString();
     }
 
-    // ---------- 小工具 ----------
+    // ------------------------------------------------------------ 顶部标签
+
+    /** labels = 全部标签（屏幕顺序），hide = 当前要隐藏的。 */
+    private void buildTabs(List<String> labels, Set<String> hide) {
+        tabFlow.removeAllViews();
+        chips.clear();
+        for (String s : labels) {
+            final TextView c = new TextView(this);
+            c.setText(s);
+            c.setTextSize(15);
+            c.setGravity(Gravity.CENTER);
+            c.setPadding(dp(16), dp(9), dp(16), dp(9));
+            styleChip(c, hide.contains(s));
+            c.setOnClickListener(v -> {
+                styleChip(c, !c.isSelected());
+                updateTabCount();
+            });
+            tabFlow.addView(c, new ViewGroup.LayoutParams(-2, -2));
+            chips.add(c);
+        }
+        updateTabCount();
+    }
+
+    private List<String> tabLabels() {
+        ArrayList<String> l = new ArrayList<>();
+        for (TextView t : chips) l.add(t.getText().toString());
+        return l;
+    }
+
+    private void updateTabCount() {
+        int n = 0;
+        for (TextView t : chips) if (t.isSelected()) n++;
+        tvTabCount.setText(n == 0 ? "未隐藏" : "已隐藏 " + n + " 个");
+    }
+
+    /** 选中（隐藏）= 蓝底白字；未选中 = 描边。 */
+    private void styleChip(TextView c, boolean selected) {
+        c.setSelected(selected);
+        c.setTextColor(selected ? 0xFFFFFFFF : cText);
+        c.setTypeface(null, selected ? Typeface.BOLD : Typeface.NORMAL);
+        c.setBackground(ripple(selected ? round(cPrimary, 0, 20) : round(cCard, cStroke, 20)));
+    }
+
+    private void readTabs() {
+        final List<String> list = DanmakuConfig.split(etPkg.getText().toString());
+        if (list.isEmpty() || !RootShell.validPkg(list.get(0))) {
+            showStatus("请先填目标包名", 2);
+            return;
+        }
+        final String pkg = list.get(0);
+        setBusy(btnReadTabs, true, "读取中…");
+        new Thread(() -> {
+            final RootShell.Result r = RootShell.readTabs(pkg);
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                setBusy(btnReadTabs, false, "读取抖音当前的标签");
+                if (r.out.contains("__NOPKG__")) {
+                    showStatus(RootShell.nopkgMsg(r.out), 2);
+                    return;
+                }
+                List<String> found = DanmakuConfig.split(r.out);
+                if (found.isEmpty()) {
+                    showStatus("还没读到标签：确认模块已启用，强杀抖音重开，停在首页等顶部标签栏出现后再点。", 2);
+                    return;
+                }
+                // 以抖音里的实际顺序为准；已勾选但这次没看到的（比如已经被隐藏）也保留，免得没法取消
+                Set<String> checked = new HashSet<>();
+                for (TextView t : chips) if (t.isSelected()) checked.add(t.getText().toString());
+                ArrayList<String> all = new ArrayList<>(found);
+                for (String s : tabLabels()) if (checked.contains(s) && !all.contains(s)) all.add(s);
+                buildTabs(all, checked);
+                showStatus("已读到 " + found.size() + " 个标签。点选要隐藏的，再点下方「保存并应用」。", 1);
+            });
+        }).start();
+    }
+
+    // ------------------------------------------------------------ 状态卡片 / 忙碌态
+
+    /** tone: 0 普通  1 成功  2 失败 */
+    private void showStatus(String msg, int tone) {
+        int bg, fg;
+        if (tone == 1) {
+            bg = dark ? 0xFF16301F : 0xFFE8F6EC;
+            fg = dark ? 0xFF8EE6A9 : 0xFF1E6B35;
+        } else if (tone == 2) {
+            bg = dark ? 0xFF3A1B1B : 0xFFFDECEC;
+            fg = dark ? 0xFFFF9C94 : 0xFFB3261E;
+        } else {
+            bg = cField;
+            fg = cText;
+        }
+        statusCard.setBackground(round(bg, 0, 16));
+        tvStatus.setTextColor(fg);
+        tvStatus.setText(msg);
+        statusCard.setVisibility(View.VISIBLE);
+        scroll.post(() -> scroll.smoothScrollTo(0, Math.max(0, statusCard.getTop() - dp(12))));
+    }
+
+    private void setBusy(TextView b, boolean busy, String label) {
+        b.setEnabled(!busy);
+        b.setAlpha(busy ? 0.55f : 1f);
+        b.setText(label);
+    }
+
+    // ------------------------------------------------------------ 控件工厂
+
+    private void initPalette() {
+        cBg = dark ? 0xFF101218 : 0xFFF5F6FA;
+        cCard = dark ? 0xFF1A1D26 : 0xFFFFFFFF;
+        cStroke = dark ? 0xFF2B303C : 0xFFE3E6EF;
+        cText = dark ? 0xFFECEEF4 : 0xFF14161C;
+        cSub = dark ? 0xFF9AA1B2 : 0xFF6B7280;
+        cPrimary = dark ? 0xFF6C85F5 : 0xFF3B5BDB;
+        cPrimarySoft = dark ? 0xFF262E52 : 0xFFE7EBFF;
+        cField = dark ? 0xFF242835 : 0xFFEEF0F6;
+    }
+
+    @SuppressWarnings("deprecation")
+    private void styleSystemBars() {
+        getWindow().setStatusBarColor(cBg);
+        getWindow().setNavigationBarColor(cCard);
+        if (!dark) {
+            int f = getWindow().getDecorView().getSystemUiVisibility() | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            if (Build.VERSION.SDK_INT >= 26) f |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            getWindow().getDecorView().setSystemUiVisibility(f);
+        }
+    }
+
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
     }
 
-    private TextView text(String s, int sp) {
+    private TextView tv(String s, int sp, int color, boolean bold) {
         TextView t = new TextView(this);
         t.setText(s);
         t.setTextSize(sp);
-        t.setPadding(0, dp(4), 0, dp(8));
+        t.setTextColor(color);
+        if (bold) t.setTypeface(null, Typeface.BOLD);
         return t;
     }
 
-    private TextView label(String s) {
-        TextView t = text(s, 13);
-        t.setTypeface(Typeface.DEFAULT_BOLD);
-        t.setPadding(0, dp(12), 0, dp(2));
+    private GradientDrawable round(int fill, int stroke, int radiusDp) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(fill);
+        g.setCornerRadius(dp(radiusDp));
+        if (stroke != 0) g.setStroke(dp(1), stroke);
+        return g;
+    }
+
+    private Drawable ripple(Drawable content) {
+        return new RippleDrawable(ColorStateList.valueOf(dark ? 0x33FFFFFF : 0x1F000000), content, null);
+    }
+
+    private LinearLayout card() {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(20), dp(18), dp(20), dp(18));
+        c.setBackground(round(cCard, cStroke, 22));
+        return c;
+    }
+
+    private LinearLayout.LayoutParams cardLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.bottomMargin = dp(4);
+        return lp;
+    }
+
+    private TextView section(String s) {
+        TextView t = tv(s, 14, cSub, true);
+        t.setPadding(dp(6), dp(20), 0, dp(8));
         return t;
     }
 
-    private RadioButton radio(String s) {
-        RadioButton r = new RadioButton(this);
-        r.setText(s);
-        r.setTextSize(14);
-        r.setId(View.generateViewId());
-        return r;
+    private View divider() {
+        View v = new View(this);
+        v.setBackgroundColor(cStroke);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(1));
+        lp.topMargin = dp(16);
+        lp.bottomMargin = dp(16);
+        v.setLayoutParams(lp);
+        return v;
+    }
+
+    private EditText field() {
+        EditText e = new EditText(this);
+        e.setSingleLine(true);
+        e.setTextSize(16);
+        e.setTextColor(cText);
+        e.setHintTextColor(cSub);
+        e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        e.setPadding(dp(16), dp(14), dp(16), dp(14));
+        e.setBackground(round(cField, 0, 14));
+        return e;
+    }
+
+    private LinearLayout switchRow(String title, String desc, Switch sw) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout txt = new LinearLayout(this);
+        txt.setOrientation(LinearLayout.VERTICAL);
+        txt.addView(tv(title, 17, cText, false));
+        TextView d = tv(desc, 13, cSub, false);
+        d.setPadding(0, dp(2), 0, 0);
+        txt.addView(d);
+        row.addView(txt, new LinearLayout.LayoutParams(0, -2, 1f));
+        int[][] st = {{android.R.attr.state_checked}, {}};
+        sw.setThumbTintList(new ColorStateList(st, new int[]{cPrimary, dark ? 0xFF8A90A0 : 0xFFFFFFFF}));
+        sw.setTrackTintList(new ColorStateList(st, new int[]{dark ? 0xFF35417A : 0xFFC5CFFA, dark ? 0xFF3A3F4D : 0xFFD5D8E2}));
+        row.addView(sw);
+        row.setOnClickListener(v -> sw.toggle());
+        return row;
+    }
+
+    private LinearLayout step(int n, String title, String desc) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, 0, 0, dp(14));
+        TextView num = tv(String.valueOf(n), 15, cPrimary, true);
+        num.setGravity(Gravity.CENTER);
+        GradientDrawable circle = new GradientDrawable();
+        circle.setShape(GradientDrawable.OVAL);
+        circle.setColor(cPrimarySoft);
+        num.setBackground(circle);
+        row.addView(num, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        LinearLayout txt = new LinearLayout(this);
+        txt.setOrientation(LinearLayout.VERTICAL);
+        txt.addView(tv(title, 17, cText, true));
+        TextView d = tv(desc, 13, cSub, false);
+        d.setPadding(0, dp(2), 0, 0);
+        txt.addView(d);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
+        lp.leftMargin = dp(14);
+        row.addView(txt, lp);
+        return row;
+    }
+
+    /** 分段按钮：点哪个选哪个，用 segIndex 读当前选中的序号。 */
+    private LinearLayout segmented(String... opts) {
+        final LinearLayout seg = new LinearLayout(this);
+        seg.setOrientation(LinearLayout.HORIZONTAL);
+        seg.setPadding(dp(4), dp(4), dp(4), dp(4));
+        seg.setBackground(round(cField, 0, 16));
+        for (int i = 0; i < opts.length; i++) {
+            final int idx = i;
+            TextView t = new TextView(this);
+            t.setText(opts[i]);
+            t.setTextSize(15);
+            t.setGravity(Gravity.CENTER);
+            t.setPadding(dp(8), dp(11), dp(8), dp(11));
+            t.setOnClickListener(v -> setSeg(seg, idx));
+            seg.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+        }
+        setSeg(seg, 0);
+        return seg;
+    }
+
+    private void setSeg(LinearLayout seg, int idx) {
+        seg.setTag(idx);
+        for (int i = 0; i < seg.getChildCount(); i++) {
+            TextView t = (TextView) seg.getChildAt(i);
+            boolean on = i == idx;
+            t.setBackground(on ? round(cPrimary, 0, 12) : null);
+            t.setTextColor(on ? 0xFFFFFFFF : cSub);
+            t.setTypeface(null, on ? Typeface.BOLD : Typeface.NORMAL);
+        }
+    }
+
+    private int segIndex(LinearLayout seg) {
+        Object t = seg.getTag();
+        return t instanceof Integer ? (Integer) t : 0;
+    }
+
+    private TextView textButton(String s, View.OnClickListener l) {
+        TextView t = tv(s, 15, cPrimary, true);
+        t.setPadding(dp(4), dp(8), dp(8), dp(8));
+        t.setOnClickListener(l);
+        return t;
+    }
+
+    private TextView pillButton(String s, boolean filled) {
+        TextView t = tv(s, 17, filled ? 0xFFFFFFFF : cText, true);
+        t.setGravity(Gravity.CENTER);
+        t.setBackground(ripple(filled ? round(cPrimary, 0, 26) : round(cCard, cStroke, 26)));
+        return t;
+    }
+
+    /** 底部固定操作栏：左边次要操作（检查状态），右边主操作（保存并应用）。 */
+    private View bottomBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.VERTICAL);
+        bar.setBackgroundColor(cCard);
+        bar.setElevation(dp(8));
+        View line = new View(this);
+        line.setBackgroundColor(cStroke);
+        bar.addView(line, new LinearLayout.LayoutParams(-1, dp(1)));
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(dp(16), dp(12), dp(16), dp(12));
+        btnCheck = pillButton("检查状态", false);
+        btnCheck.setOnClickListener(v -> check());
+        btnPush = pillButton("保存并应用", true);
+        btnPush.setOnClickListener(v -> save());
+        row.addView(btnCheck, new LinearLayout.LayoutParams(0, dp(52), 1f));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(52), 1.5f);
+        lp.leftMargin = dp(12);
+        row.addView(btnPush, lp);
+        bar.addView(row);
+        return bar;
+    }
+
+    /** 自动换行的流式布局（标签胶囊用）。 */
+    private static final class Flow extends ViewGroup {
+        private final int hGap, vGap;
+
+        Flow(Context c, int hGap, int vGap) {
+            super(c);
+            this.hGap = hGap;
+            this.vGap = vGap;
+        }
+
+        @Override
+        protected void onMeasure(int wSpec, int hSpec) {
+            int maxW = MeasureSpec.getSize(wSpec) - getPaddingLeft() - getPaddingRight();
+            int x = 0, y = 0, rowH = 0, usedW = 0;
+            for (int i = 0; i < getChildCount(); i++) {
+                View c = getChildAt(i);
+                if (c.getVisibility() == GONE) continue;
+                c.measure(MeasureSpec.makeMeasureSpec(maxW, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED));
+                int w = c.getMeasuredWidth(), h = c.getMeasuredHeight();
+                if (x > 0 && x + w > maxW) {
+                    x = 0;
+                    y += rowH + vGap;
+                    rowH = 0;
+                }
+                x += w + hGap;
+                rowH = Math.max(rowH, h);
+                usedW = Math.max(usedW, x - hGap);
+            }
+            setMeasuredDimension(resolveSize(usedW + getPaddingLeft() + getPaddingRight(), wSpec),
+                    resolveSize(y + rowH + getPaddingTop() + getPaddingBottom(), hSpec));
+        }
+
+        @Override
+        protected void onLayout(boolean changed, int l, int t, int r, int b) {
+            int maxW = r - l - getPaddingLeft() - getPaddingRight();
+            int x = 0, y = 0, rowH = 0;
+            for (int i = 0; i < getChildCount(); i++) {
+                View c = getChildAt(i);
+                if (c.getVisibility() == GONE) continue;
+                int w = c.getMeasuredWidth(), h = c.getMeasuredHeight();
+                if (x > 0 && x + w > maxW) {
+                    x = 0;
+                    y += rowH + vGap;
+                    rowH = 0;
+                }
+                c.layout(getPaddingLeft() + x, getPaddingTop() + y, getPaddingLeft() + x + w, getPaddingTop() + y + h);
+                x += w + hGap;
+                rowH = Math.max(rowH, h);
+            }
+        }
     }
 }
