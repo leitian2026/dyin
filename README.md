@@ -70,3 +70,8 @@
 - 1.9 把类名里带 lottie 的 View 一律当成红心：布局预加载时加进界面的 Lottie（LayoutInflater 里的 addView）也被挡了，状态里的“✓ 已挡掉”是误判，还可能让界面缺控件。现在布局预加载阶段的 addView 一律不拦、不记。
 - 抖音用的 Lottie 是字节自己的分支 com.bytedance.lottie.LottieAnimationView（1.9 只挂了 com.airbnb 那个）。现在两个都挂：双击后 1.5 秒内的 playAnimation / resumeAnimation 直接跳过。
 - Lottie 的可见性变化（setVisibility）在窗口内会被改成不可见。
+
+## 1.9.2：日志别被噪音挤满
+- 1.9.1 的日志里，双击后一堆“新增 View”其实是抖音 X2C / AndInflater 在代码里预加载布局（调用栈里没有 LayoutInflater 帧，过滤漏掉了）。现在 com.by.inflate_lib / nita.inflate 也算预加载，不记。
+- 评论面板（comment / comment_split）打开 / 收起时的动画不再记。
+- 调用栈只留 9 帧；状态文件上限从 16KB 提到 64KB（超出保留最后 32KB）。之前“已挂接”那几行被噪音挤掉，检查状态才会显示“还没挂接”。
