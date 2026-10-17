@@ -283,12 +283,21 @@ public class MainActivity extends Activity {
         else if (out.contains("暂未找到 Compose")) sb.append("还没找到 Compose 文字类：打开抖音进入视频页后再检查。\n");
         else sb.append("模块已加载，但还没挂接：打开抖音进入视频页后再检查。\n");
         if (out.contains("点赞入口被触发")) sb.append("点赞按钮入口：已触发过（下面“最近状态”里有调用栈）。\n");
-        if (out.contains("双击监听被触发")) sb.append("双击：识别到了双击监听（见下面的类名）。\n");
-        else sb.append("双击：还没识别到双击监听——在视频上双击一下再点检查；仍没有说明抖音没用系统手势识别双击。\n");
+        java.util.LinkedHashSet<String> taps = new java.util.LinkedHashSet<>();
+        for (String ln : out.split("\n")) {
+            int i = ln.indexOf("双击监听被触发：");
+            if (i >= 0) taps.add(ln.substring(i + 8).trim());
+        }
+        if (taps.isEmpty()) {
+            sb.append("双击：状态里还没有双击记录——在视频上双击一下再点检查（日志只保留最近一段，隔太久可能已被挤掉）。\n");
+        } else {
+            sb.append("双击：识别到 ").append(taps.size()).append(" 个双击回调：\n");
+            for (String t : taps) sb.append("  · ").append(t).append('\n');
+        }
         if (out.contains("双击后点赞仍被触发")) sb.append("✗ 双击后点赞仍然被触发了：调用栈在下面“最近状态”里，把它发给我就能找到真正的点赞入口。\n");
         if (out.contains("里没有叫")) sb.append("✗ 点赞入口方法名对不上：抖音版本变了，需要重新记录。\n");
         String[] lines = out.trim().split("\n");
-        int from = Math.max(0, lines.length - 12);
+        int from = Math.max(0, lines.length - 16);
         sb.append("\n最近状态：\n");
         for (int i = from; i < lines.length; i++) sb.append(lines[i]).append('\n');
         return sb.toString();
