@@ -86,6 +86,9 @@ final class CommentHook {
     // ------------------------------------------------------------ 双击红心动画
 
     private static final java.util.regex.Pattern HEART = java.util.regex.Pattern.compile(
+            "heart|digg|like|praise|love|thumb|favor|burst", java.util.regex.Pattern.CASE_INSENSITIVE);
+    /** 可见性变化 / 播放时再把 lottie 算进去（预加载时加进界面的 Lottie 不是红心，不能挡，否则会缺控件甚至闪退）。 */
+    private static final java.util.regex.Pattern HEART_LOTTIE = java.util.regex.Pattern.compile(
             "heart|digg|like|praise|love|thumb|favor|burst|lottie", java.util.regex.Pattern.CASE_INSENSITIVE);
 
     /** 类名 + 资源 id 名，用来判断是不是红心动画相关的 View。 */
@@ -115,10 +118,11 @@ final class CommentHook {
                             try {
                                 if (!guardActive() || p.args == null || !(p.args[0] instanceof View)) return;
                                 String d = describe((View) p.args[0]);
+                                if (inInflate()) return; // 布局预加载（LayoutInflater）不是红心：不记、更不能挡（挡了会缺控件）
                                 if (HEART.matcher(d).find()) {
                                     logOnce("hv-add:" + d, "已挡掉双击红心（addView）：" + d + " ← " + callers());
                                     p.setResult(null);
-                                } else if (!inInflate()) { // 布局预加载（LayoutInflater）不是红心，不记
+                                } else {
                                     logOnce("hv-seen:" + d, "双击后新增 View：" + d + " ← " + callers());
                                 }
                             } catch (Throwable ignored) {
@@ -136,7 +140,7 @@ final class CommentHook {
                         if (!guardActive() || p.args == null || ((Integer) p.args[0]) != View.VISIBLE) return;
                         View v = (View) p.thisObject;
                         String d = describe(v);
-                        if (HEART.matcher(d).find()) {
+                        if (HEART_LOTTIE.matcher(d).find()) {
                             logOnce("hv-vis:" + d, "已挡掉双击红心（setVisibility）：" + d + " ← " + callers());
                             p.args[0] = View.INVISIBLE;
                         }
@@ -223,37 +227,40 @@ final class CommentHook {
         }
     }
 
-    private static volatile boolean lottieHooked;
+    private static final java.util.Set<String> LOTTIE_DONE = Collections.synchronizedSet(new HashSet<String>());
 
-    /** 红心很可能是 Lottie 动画：窗口内不让它开始播放。需要目标 App 的类加载器。 */
+    /** 红心很可能是 Lottie 动画（抖音用的是字节自己的分支 com.bytedance.lottie，也可能是 airbnb 原版）：窗口内不让它开始播放。 */
     private static void hookLottie(ClassLoader cl) {
-        if (lottieHooked || cl == null) return;
-        try {
-            Class<?> k = Class.forName("com.airbnb.lottie.LottieAnimationView", false, cl);
-            int n = 0;
-            for (Method m : k.getDeclaredMethods()) {
-                if (!m.getName().equals("playAnimation") && !m.getName().equals("resumeAnimation")) continue;
-                XposedBridge.hookMethod(m, new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam p) {
-                        try {
-                            if (!guardActive()) return;
-                            String d = describe((View) p.thisObject);
-                            logOnce("hv-lottie:" + d, "双击后 Lottie 开始播放：" + d + (HEART.matcher(d).find() ? "（已挡掉）" : "") + " ← " + callers());
-                            if (HEART.matcher(d).find()) p.setResult(null);
-                        } catch (Throwable ignored) {
+        if (cl == null) return;
+        for (final String cn : new String[]{"com.bytedance.lottie.LottieAnimationView", "com.airbnb.lottie.LottieAnimationView"}) {
+            if (LOTTIE_DONE.contains(cn)) continue;
+            try {
+                Class<?> k = Class.forName(cn, false, cl);
+                int n = 0;
+                for (Method m : k.getDeclaredMethods()) {
+                    if (!m.getName().equals("playAnimation") && !m.getName().equals("resumeAnimation")) continue;
+                    XposedBridge.hookMethod(m, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam p) {
+                            try {
+                                if (!guardActive()) return;
+                                String d = describe((View) p.thisObject);
+                                logOnce("hv-lottie:" + d, "双击后 Lottie 开始播放：" + d + "（已挡掉） ← " + callers());
+                                p.setResult(null);
+                            } catch (Throwable ignored) {
+                            }
                         }
-                    }
-                });
-                n++;
+                    });
+                    n++;
+                }
+                LOTTIE_DONE.add(cn);
+                DanmakuHook.status("已挂接 Lottie 播放：" + cn + "（" + n + " 个方法）");
+            } catch (ClassNotFoundException e) {
+                // 没有这个类或还没加载：下次回到前台再试
+            } catch (Throwable t) {
+                LOTTIE_DONE.add(cn);
+                DanmakuHook.status("挂接 Lottie 失败：" + cn + " " + t);
             }
-            lottieHooked = true;
-            DanmakuHook.status("已挂接 Lottie 播放（" + n + " 个方法）");
-        } catch (ClassNotFoundException e) {
-            // 没有这个类或还没加载：下次回到前台再试
-        } catch (Throwable t) {
-            lottieHooked = true;
-            DanmakuHook.status("挂接 Lottie 失败：" + t);
         }
     }
 
