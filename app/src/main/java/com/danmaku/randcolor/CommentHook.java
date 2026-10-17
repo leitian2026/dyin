@@ -37,8 +37,17 @@ final class CommentHook {
     /** 版本相关：40.7.0 里右侧爱心按钮 onClick 调到的方法。换版本后用 TextRec 重新记录一次，把新名字改在这里。 */
     private static final String DIGG_CLICK_METHOD = "LJJJJJL";
 
+    /** 点赞后刷新界面那一步（#316 / #545 都经过它）。只用来诊断：双击之后它又被调用，就把栈记下来，找真正的点赞入口。 */
+    private static final String DIGG_UI_METHOD = "LJJLIIIJL";
+
     private static boolean installed;
     private static volatile boolean diggHooked;
+    /** 最近一次识别到双击的时间（不管开关开没开），用来诊断。 */
+    private static volatile long lastDtapAt;
+    /** 最近一次我们接管双击并打开评论的时间；同一次双击里多个回调 / 多个监听只打开一次。 */
+    private static volatile long lastOpenAt;
+    /** 本次双击的后续事件（移动、抬起）也要一起拦掉。 */
+    private static volatile boolean dtapBlocking;
     private static final Set<Class<?>> TAP_HOOKED = Collections.synchronizedSet(new HashSet<Class<?>>());
     private static final Set<String> LOGGED = Collections.synchronizedSet(new HashSet<String>());
 
@@ -89,6 +98,20 @@ final class CommentHook {
                 });
                 n++;
             }
+            for (Method m : k.getDeclaredMethods()) {
+                if (!m.getName().equals(DIGG_UI_METHOD)) continue;
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam p) {
+                        try {
+                            if (android.os.SystemClock.uptimeMillis() - lastDtapAt > 1500) return;
+                            String c = callers();
+                            if (LOGGED.size() < 40) logOnce("after-tap:" + c.hashCode(), "双击后点赞仍被触发：" + c);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+            }
             diggHooked = true;
             DanmakuHook.status(n > 0 ? "已挂接 FeedDiggPresenter#" + DIGG_CLICK_METHOD + "（" + n + " 个重载）"
                     : "FeedDiggPresenter 里没有叫 " + DIGG_CLICK_METHOD + " 的方法：抖音版本变了，需要用 TextRec 重新记录点赞入口");
@@ -118,23 +141,71 @@ final class CommentHook {
         if (!(l instanceof GestureDetector.OnDoubleTapListener)) return;
         Class<?> k = l.getClass();
         if (!TAP_HOOKED.add(k)) return;
+        // 系统在第二次点按时依次回调：onDoubleTap(第一次点按的 DOWN) → onDoubleTapEvent(第二次的 DOWN) → … → onDoubleTapEvent(UP)。
+        // 点赞可能写在其中任何一个里，所以两个都要接管。
         try {
             Method m = k.getMethod("onDoubleTap", MotionEvent.class);
-            if (m.getDeclaringClass() == GestureDetector.SimpleOnGestureListener.class) return; // 默认空实现
-            XposedBridge.hookMethod(m, new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam p) {
-                    try {
-                        // 不管开没开关都记一次：看哪个类处理了双击（抖音有没有用 GestureDetector 一看便知）
-                        logOnce("tap:" + p.method.getDeclaringClass().getName(),
-                                "双击监听被触发：" + p.method.getDeclaringClass().getName() + "#onDoubleTap");
-                        if (!DanmakuHook.cfg.dtapToComment) return;
-                        if (openComments()) p.setResult(Boolean.TRUE); // 返回 true = 已处理，原来的点赞逻辑不再执行
-                    } catch (Throwable ignored) {
+            if (m.getDeclaringClass() != GestureDetector.SimpleOnGestureListener.class) { // 默认空实现不用管
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam p) {
+                        try {
+                            onTap(p, true);
+                        } catch (Throwable ignored) {
+                        }
                     }
-                }
-            });
+                });
+            }
         } catch (Throwable ignored) {
+        }
+        try {
+            Method m = k.getMethod("onDoubleTapEvent", MotionEvent.class);
+            if (m.getDeclaringClass() != GestureDetector.SimpleOnGestureListener.class) {
+                XposedBridge.hookMethod(m, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam p) {
+                        try {
+                            onTap(p, false);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void onTap(XC_MethodHook.MethodHookParam p, boolean isDoubleTap) {
+        long now = android.os.SystemClock.uptimeMillis();
+        lastDtapAt = now;
+        String who = p.method.getDeclaringClass().getName() + (isDoubleTap ? "#onDoubleTap" : "#onDoubleTapEvent");
+        // 不管开没开关都记一次：看哪个类的哪个回调处理了双击
+        logOnce("tap:" + who, "双击监听被触发：" + who);
+        if (!DanmakuHook.cfg.dtapToComment) return;
+        int action = -1;
+        if (!isDoubleTap && p.args != null && p.args.length > 0 && p.args[0] instanceof MotionEvent) {
+            action = ((MotionEvent) p.args[0]).getActionMasked();
+        }
+        // 第二次点按之后的移动 / 抬起：本次双击已经接管就一起拦掉
+        if (!isDoubleTap && action != MotionEvent.ACTION_DOWN) {
+            if (dtapBlocking && now - lastOpenAt < 3000) {
+                p.setResult(Boolean.TRUE);
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) dtapBlocking = false;
+            } else {
+                dtapBlocking = false;
+            }
+            return;
+        }
+        // 双击开始（onDoubleTap，或 onDoubleTapEvent 的 DOWN）：同一次双击里已经有别的回调打开过评论就只拦截
+        if (now - lastOpenAt < 800) {
+            dtapBlocking = true;
+            p.setResult(Boolean.TRUE);
+            return;
+        }
+        if (openComments()) {
+            lastOpenAt = now;
+            dtapBlocking = true;
+            p.setResult(Boolean.TRUE); // 返回 true = 已处理，原来的点赞逻辑不再执行
         }
     }
 
