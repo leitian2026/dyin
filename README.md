@@ -51,3 +51,9 @@
 ## 1.6：定位双击点赞的真正入口（诊断）
 - 1.5 的日志：双击回调是 X.1cy3#onDoubleTap / onDoubleTapEvent，已被拦下并打开了评论，但点赞仍发生（LJJLIIIJL 被 Handler 的 X.1DAj.run 和 EventBus 的 subscribeDiggUpdateEvent 调用）。
 - 新增只记不改的诊断：谁发出了点赞相关的 EventBus 事件、X.1DAj 在哪里创建、双击监听类的 onSingleTapUp / onSingleTapConfirmed 是否被触发；调用栈改为完整类名并跳过钩子帧。
+
+## 1.7：双击不再点赞
+- 根据 1.6 日志：双击回调拦住后点赞仍发生，真正的发起点是 FeedDiggPresenter$observeVM$2.LIZ（它在 Handler 里创建 X.1DAj 执行点赞）。
+- 新增：「双击→评论」开着时，双击后 1.5 秒内跳过 observeVM$2.LIZ，点赞不会发出；按钮点赞、切视频等其它情况原样放行。
+- 找不到评论按钮时也不再放行点赞（以前会放行）。
+- 日志里出现「已拦下双击点赞」就说明拦截生效；如果出现「observeVM$2 里没有叫 LIZ 的方法」，是抖音版本变了。
