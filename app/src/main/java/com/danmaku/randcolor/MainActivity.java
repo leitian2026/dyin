@@ -38,7 +38,7 @@ public class MainActivity extends Activity {
     private int cBg, cCard, cStroke, cText, cSub, cPrimary, cPrimarySoft, cField;
 
     private EditText etPkg;
-    private Switch swEnabled;
+    private Switch swEnabled, swLikeBtn, swDtap;
     private LinearLayout segMode, segKey, statusCard;
     private Flow tabFlow;
     private final ArrayList<TextView> chips = new ArrayList<>();
@@ -121,6 +121,19 @@ public class MainActivity extends Activity {
         colors.addView(segKey);
         root.addView(colors, cardLp());
 
+        // ---- 点赞改为打开评论
+        root.addView(section("点赞 → 打开评论"));
+        LinearLayout like = card();
+        swLikeBtn = new Switch(this);
+        like.addView(switchRow("点右侧爱心按钮时打开评论", "不再点赞（也不会取消赞），改为点开这个视频的评论", swLikeBtn));
+        like.addView(divider());
+        swDtap = new Switch(this);
+        like.addView(switchRow("双击视频时打开评论（实验）", "双击不再点赞。依赖抖音用系统手势识别双击，不一定生效；点「检查状态」能看到有没有识别到", swDtap));
+        TextView ld = tv("找不到当前视频的评论按钮时不会拦截，点赞照常。", 13, cSub, false);
+        ld.setPadding(0, dp(12), 0, 0);
+        like.addView(ld);
+        root.addView(like, cardLp());
+
         // ---- 首页顶部标签
         root.addView(section("首页顶部标签"));
         LinearLayout tabs = card();
@@ -172,6 +185,8 @@ public class MainActivity extends Activity {
         etPkg.setText(sp.getString("pkg", DEFAULT_PKG));
         DanmakuConfig c = DanmakuConfig.fromText(sp.getString("cfg", ""));
         swEnabled.setChecked(c.enabled);
+        swLikeBtn.setChecked(c.likeBtnToComment);
+        swDtap.setChecked(c.dtapToComment);
         setSeg(segMode, c.mode == 1 ? 1 : 0);
         setSeg(segKey, c.keyByText ? 1 : 0);
         buildTabs(DanmakuConfig.split(sp.getString("tabs", DEFAULT_TABS)), c.hideTabs);
@@ -182,6 +197,8 @@ public class MainActivity extends Activity {
         c.enabled = swEnabled.isChecked();
         c.mode = segIndex(segMode) == 1 ? 1 : 0;
         c.keyByText = segIndex(segKey) == 1;
+        c.likeBtnToComment = swLikeBtn.isChecked();
+        c.dtapToComment = swDtap.isChecked();
         for (TextView t : chips) if (t.isSelected()) c.hideTabs.add(t.getText().toString());
         return c;
     }
@@ -265,6 +282,10 @@ public class MainActivity extends Activity {
         else if (out.contains("没找到匹配的 paint")) sb.append("✗ 抖音这个版本的 Compose 接口变了，需要更新模块（把下面的内容发给我）。\n");
         else if (out.contains("暂未找到 Compose")) sb.append("还没找到 Compose 文字类：打开抖音进入视频页后再检查。\n");
         else sb.append("模块已加载，但还没挂接：打开抖音进入视频页后再检查。\n");
+        if (out.contains("点赞入口被触发")) sb.append("点赞按钮入口：已触发过（下面“最近状态”里有调用栈）。\n");
+        if (out.contains("双击监听被触发")) sb.append("双击：识别到了双击监听（见下面的类名）。\n");
+        else sb.append("双击：还没识别到双击监听——在视频上双击一下再点检查；仍没有说明抖音没用系统手势识别双击。\n");
+        if (out.contains("里没有叫")) sb.append("✗ 点赞入口方法名对不上：抖音版本变了，需要重新记录。\n");
         String[] lines = out.trim().split("\n");
         int from = Math.max(0, lines.length - 12);
         sb.append("\n最近状态：\n");
