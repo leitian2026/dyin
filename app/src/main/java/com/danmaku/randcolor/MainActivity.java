@@ -294,8 +294,8 @@ public class MainActivity extends Activity {
             sb.append("双击：识别到 ").append(taps.size()).append(" 个双击回调：\n");
             for (String t : taps) sb.append("  · ").append(t).append('\n');
         }
-        if (out.contains("已挡掉双击红心")) sb.append("✓ 双击红心动画已被挡掉。\n");
-        if (out.contains("双击后新增 View") && !out.contains("已挡掉双击红心")) sb.append("△ 红心动画还没挡到：把“最近状态”里「双击后新增 View」那几行发给我。\n");
+        if (out.contains("已挡掉双击红心") || out.contains("（已挡掉）") || out.contains("（已隐藏）")) sb.append("✓ 双击红心动画已被挡掉。\n");
+        if ((out.contains("双击后新增 View") || out.contains("双击后动画开始") || out.contains("双击后 ViewStub") || out.contains("双击后 Lottie") || out.contains("双击后 View 动画")) && !out.contains("（已挡掉）") && !out.contains("（已隐藏）") && !out.contains("已挡掉双击红心")) sb.append("△ 红心动画还没挡到：把“最近状态”里带「双击后」的几行发给我。\n");
         if (out.contains("已拦下双击点赞")) sb.append("✓ 双击点赞已被拦下。\n");
         if (out.contains("双击后点赞仍被触发")) sb.append("✗ 双击后点赞仍然被触发了：调用栈在下面“最近状态”里，把它发给我就能找到真正的点赞入口。\n");
         if (out.contains("里没有叫")) sb.append("✗ 点赞入口方法名对不上：抖音版本变了，需要重新记录。\n");
