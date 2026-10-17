@@ -65,3 +65,8 @@
 ## 1.9：红心动画诊断
 - 1.8 日志：双击后新增的 View 全是 LayoutInflater 预加载的 ViewStub / 布局，不是红心；点赞拦截已生效。
 - addView 不再记布局预加载；新增记录「ViewStub 展开」「属性动画开始（含目标 View）」「帧动画」「View 动画」「Lottie 播放」，名字像红心的直接挡掉。
+
+## 1.9.1：修正红心拦截的误判
+- 1.9 把类名里带 lottie 的 View 一律当成红心：布局预加载时加进界面的 Lottie（LayoutInflater 里的 addView）也被挡了，状态里的“✓ 已挡掉”是误判，还可能让界面缺控件。现在布局预加载阶段的 addView 一律不拦、不记。
+- 抖音用的 Lottie 是字节自己的分支 com.bytedance.lottie.LottieAnimationView（1.9 只挂了 com.airbnb 那个）。现在两个都挂：双击后 1.5 秒内的 playAnimation / resumeAnimation 直接跳过。
+- Lottie 的可见性变化（setVisibility）在窗口内会被改成不可见。
