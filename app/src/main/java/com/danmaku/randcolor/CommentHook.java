@@ -49,7 +49,7 @@ final class CommentHook {
     /** 本次双击的后续事件（移动、抬起）也要一起拦掉。 */
     private static volatile boolean dtapBlocking;
     private static final Set<Class<?>> TAP_HOOKED = Collections.synchronizedSet(new HashSet<Class<?>>());
-    private static final Set<String> LOGGED = Collections.synchronizedSet(new HashSet<String>());
+    private static final java.util.concurrent.ConcurrentHashMap<String, Long> LOGGED = new java.util.concurrent.ConcurrentHashMap<>();
 
     static synchronized void install() {
         if (installed) return;
@@ -106,7 +106,7 @@ final class CommentHook {
                         try {
                             if (android.os.SystemClock.uptimeMillis() - lastDtapAt > 1500) return;
                             String c = callers();
-                            if (LOGGED.size() < 40) logOnce("after-tap:" + c.hashCode(), "双击后点赞仍被触发：" + c);
+                            logOnce("after-tap:" + c.hashCode(), "双击后点赞仍被触发：" + c);
                         } catch (Throwable ignored) {
                         }
                     }
@@ -281,7 +281,12 @@ final class CommentHook {
     // ------------------------------------------------------------ 诊断
 
     private static void logOnce(String key, String msg) {
-        if (LOGGED.add(key)) DanmakuHook.status(msg);
+        long now = android.os.SystemClock.uptimeMillis();
+        Long last = LOGGED.get(key);
+        if (last != null && now - last < 120000) return; // 同一条 2 分钟内只记一次；之后再触发会再记，免得状态文件被截断后找不到
+        if (LOGGED.size() > 200) LOGGED.clear();
+        LOGGED.put(key, now);
+        DanmakuHook.status(msg);
     }
 
     /** 当前调用栈里有点击 / 触摸 / 手势事件的帧，说明是用户操作直接引起的。 */
