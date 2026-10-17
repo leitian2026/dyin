@@ -54,6 +54,8 @@ final class DanmakuHook {
         status("模块已加载 " + cfg.summary());
         tryInstall(lp.classLoader);
         TabHook.install();
+        CommentHook.install();
+        CommentHook.tryHookDigg(lp.classLoader);
         hookResume();
     }
 
@@ -90,7 +92,11 @@ final class DanmakuHook {
                         long before = cfgMtime;
                         reload(true); // 回到前台必查一次配置（不受 2 秒节流），改了隐藏列表马上生效
                         if (cfgMtime != before) status("配置已更新 " + cfg.summary());
-                        if (p.thisObject instanceof Activity) TabHook.scanLater((Activity) p.thisObject);
+                        if (p.thisObject instanceof Activity) {
+                            TabHook.scanLater((Activity) p.thisObject);
+                            CommentHook.top = new java.lang.ref.WeakReference<>((Activity) p.thisObject);
+                            CommentHook.tryHookDigg(p.thisObject.getClass().getClassLoader());
+                        }
                         // Compose 类可能晚于进程启动才可用（插件/动态加载），回到前台时再试
                         if (!installed && p.thisObject != null) tryInstall(p.thisObject.getClass().getClassLoader());
                     } catch (Throwable ignored) {
