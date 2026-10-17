@@ -80,3 +80,8 @@
 - 猜测：红心像直播点赞那样“点一下生成一个”，而且在 GestureDetector 的 onDoubleTap 之前就生成了，所以之前的 1.5 秒窗口开晚了、什么都没记到。
 - 现在在 Activity.dispatchTouchEvent 最前面自己判断“第二次按下”（间隔小于系统双击超时、位置相近）并立即开窗；状态里出现「第二次按下（触摸层）：已提前开窗」说明触发了。
 - 「新增 View」只记调用栈里有点击 / 触摸帧、且不来自评论面板的；信息流预加载下一个视频的不再记。
+
+## 1.10：直接拦 DiggLayout（红心的真正来源）
+- 1.9.3 日志找到了：双击时 X.06y9.onTouch → BaseListFragmentPanel.LLLIIILIL → FullFeedFragmentPanel.LLLIIIIL → BaseListFragmentPanel.LLLIIIIL → common.widget.DiggLayout.LIZJ，里面 addView(ImageView) 并 startAnimation。不是 Lottie，也不是 onDoubleTap 里生成的。
+- 新增：窗口内（触摸层第二次按下起 1.5 秒，连点会延长）跳过 DiggLayout.LIZJ（void / 基本类型返回值的重载）。作为兜底，调用栈里有 DiggLayout 的 addView / setVisibility / startAnimation / 属性动画 / Lottie 也跳过。
+- 去掉按类名猜红心的拦截：1.9.x 里 BuryView2（评论里的踩按钮，类名带 digg）被误拦，评论列表会缺控件；Lottie 预加载也被误拦。现在只拦来自 DiggLayout 的。
