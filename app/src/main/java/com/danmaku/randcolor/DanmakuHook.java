@@ -43,7 +43,6 @@ final class DanmakuHook {
         cfgFile = new File(new File(lp.appInfo.dataDir, "files"), "danmaku_color.properties");
         reload();
         tryInstall(lp.classLoader);
-        CommentHook.install();
         CommentHook.tryHook(lp.classLoader);
         hookResume();
     }
