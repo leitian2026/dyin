@@ -47,3 +47,7 @@
 - 沙箱子进程（sandboxed_process）不再初始化。以前它也往同一个状态文件里写，还会在文件超过 8K 时把整个文件删掉，主进程的行（包括双击监听记录）就被一起丢了，“检查状态”只剩子进程的几行。
 - 状态文件超长时改为只保留最近约 8KB。
 - 双击诊断日志每 2 分钟可再记一次；“检查状态”把识别到的双击回调逐个列出来。
+
+## 1.6：定位双击点赞的真正入口（诊断）
+- 1.5 的日志：双击回调是 X.1cy3#onDoubleTap / onDoubleTapEvent，已被拦下并打开了评论，但点赞仍发生（LJJLIIIJL 被 Handler 的 X.1DAj.run 和 EventBus 的 subscribeDiggUpdateEvent 调用）。
+- 新增只记不改的诊断：谁发出了点赞相关的 EventBus 事件、X.1DAj 在哪里创建、双击监听类的 onSingleTapUp / onSingleTapConfirmed 是否被触发；调用栈改为完整类名并跳过钩子帧。
