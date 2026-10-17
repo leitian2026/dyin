@@ -38,3 +38,7 @@
 - 「双击视频时打开评论（实验）」：通用办法，监听系统 GestureDetector 的 onDoubleTap；抖音没用它做双击就不生效，「检查状态」会列出识别到的双击监听类。
 - 评论按钮靠 contentDescription“评论N，按钮”（TextRec 记录里的 LinearLayout id=e9l）找，找不到就不拦截，点赞照常。
 - 换抖音版本后，LJJJJJL 这个名字要用 TextRec 重新记录，改 CommentHook.DIGG_CLICK_METHOD。
+
+## 1.4：双击也拦 onDoubleTapEvent
+- 1.3 只拦了 onDoubleTap，双击能开评论但点赞仍会发生（点赞写在后续的 onDoubleTapEvent 里）。现在两个回调都接管：双击开始时打开评论（只打开一次），第二次点按的移动 / 抬起也一并拦掉。
+- 诊断：双击之后如果点赞刷新（FeedDiggPresenter#LJJLIIIJL）仍被调用，“检查状态”会记下调用栈，用来定位真正的点赞入口。
