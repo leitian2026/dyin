@@ -127,24 +127,4 @@ final class RootShell {
                 + "echo __OK__\n";
         return run(script, 30);
     }
-
-    /** 读取目标 App 里 Hook 记下的首页顶部标签（一行一个，按屏幕上从左到右的顺序）。 */
-    static Result readTabs(String pkg) {
-        String script = findDirs(pkg)
-                + "for D in $DIRS; do\n"
-                + "cat $D/files/danmaku_color.tabs 2>/dev/null\n"
-                + "done\n"
-                + "true\n";
-        return run(script, 30);
-    }
-
-    /** 读取目标 App 里 Hook 写的状态文件。 */
-    static Result readStatus(String pkg) {
-        String script = findDirs(pkg)
-                + "for D in $DIRS; do\n"
-                + "cat $D/files/danmaku_color.status 2>/dev/null\n"
-                + "done\n"
-                + "true\n";
-        return run(script, 30);
-    }
 }
