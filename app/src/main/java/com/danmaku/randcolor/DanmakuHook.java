@@ -248,11 +248,11 @@ final class DanmakuHook {
 
     // ------------------------------------------------------------ 状态文件（模块界面「检查状态」读它）
 
-    /** 只保留最后约 8KB，并从完整的一行开始。 */
+    /** 只保留最后约 32KB，并从完整的一行开始。 */
     private static void trimStatus(File f) {
         try {
             byte[] all = java.nio.file.Files.readAllBytes(f.toPath());
-            int from = Math.max(0, all.length - 8000);
+            int from = Math.max(0, all.length - 32000);
             while (from < all.length && all[from] != '\n') from++;
             from++;
             try (FileOutputStream os = new FileOutputStream(f, false)) {
@@ -270,7 +270,7 @@ final class DanmakuHook {
             String line = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(new Date())
                     + " [" + proc + " p" + Process.myPid() + "] " + msg + "\n";
             synchronized (DanmakuHook.class) {
-                if (f.length() > 16384) trimStatus(f); // 以前是超过 8K 整个删掉，会把刚记下的行一起丢了
+                if (f.length() > 65536) trimStatus(f); // 以前是超过 8K 整个删掉，会把刚记下的行一起丢了
                 try (FileOutputStream os = new FileOutputStream(f, true)) {
                     os.write(line.getBytes(StandardCharsets.UTF_8));
                 }
