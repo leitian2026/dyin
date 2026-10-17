@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">弹幕随机色</string>
-    <string name="xposed_desc">让抖音弹幕每条使用随机颜色（保留黑色描边）；可隐藏首页顶部标签</string>
+    <string name="xposed_desc">让抖音弹幕每条使用随机颜色（保留黑色描边）；点赞按钮 / 双击改为打开评论</string>
     <string-array name="xposedscope">
         <item>com.ss.android.ugc.aweme</item>
     </string-array>
