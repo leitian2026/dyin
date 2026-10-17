@@ -29,7 +29,7 @@ public final class DanmakuConfig {
             p.setProperty("enabled", String.valueOf(enabled));
             p.setProperty("mode", String.valueOf(mode));
             p.setProperty("keyByText", String.valueOf(keyByText));
-            p.setProperty("hideTabs", String.join(",", hideTabs)); // 中文会被 Properties 存成 \uXXXX，读回来自动还原
+            p.setProperty("hideTabs", String.join(",", hideTabs)); // 中文会被 Properties 自动转义存储，读回来自动还原
             ByteArrayOutputStream bo = new ByteArrayOutputStream();
             p.store(bo, null);
             return new String(bo.toByteArray(), StandardCharsets.ISO_8859_1);
