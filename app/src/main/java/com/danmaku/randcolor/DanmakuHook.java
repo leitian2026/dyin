@@ -48,10 +48,12 @@ final class DanmakuHook {
         files.mkdirs();
         cfgFile = new File(files, "danmaku_color.properties");
         statusFile = new File(files, "danmaku_color.status");
+        TabHook.tabsFile = new File(files, "danmaku_color.tabs");
         proc = lp.processName == null ? "?" : lp.processName;
         reload(true);
         status("模块已加载 " + cfg.summary());
         tryInstall(lp.classLoader);
+        TabHook.install();
         hookResume();
     }
 
@@ -85,7 +87,10 @@ final class DanmakuHook {
                 @Override
                 protected void afterHookedMethod(MethodHookParam p) {
                     try {
-                        maybeReload();
+                        long before = cfgMtime;
+                        reload(true); // 回到前台必查一次配置（不受 2 秒节流），改了隐藏列表马上生效
+                        if (cfgMtime != before) status("配置已更新 " + cfg.summary());
+                        if (p.thisObject instanceof Activity) TabHook.scanLater((Activity) p.thisObject);
                         // Compose 类可能晚于进程启动才可用（插件/动态加载），回到前台时再试
                         if (!installed && p.thisObject != null) tryInstall(p.thisObject.getClass().getClassLoader());
                     } catch (Throwable ignored) {
