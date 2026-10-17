@@ -81,6 +81,7 @@ final class CommentHook {
         }
         hookHeartViews();
         hookHeartAnimations();
+        hookTouchGuard();
     }
 
     // ------------------------------------------------------------ 双击红心动画
@@ -118,12 +119,13 @@ final class CommentHook {
                             try {
                                 if (!guardActive() || p.args == null || !(p.args[0] instanceof View)) return;
                                 String d = describe((View) p.args[0]);
-                                if (inInflate()) return; // 布局预加载（LayoutInflater）不是红心：不记、更不能挡（挡了会缺控件）
+                                if (inInflate()) return; // 布局预加载（LayoutInflater / X2C）不是红心：不记、更不能挡（挡了会缺控件）
                                 if (HEART.matcher(d).find()) {
                                     logOnce("hv-add:" + d, "已挡掉双击红心（addView）：" + d + " ← " + callers());
                                     p.setResult(null);
-                                } else {
-                                    logOnce("hv-seen:" + d, "双击后新增 View：" + d + " ← " + callers());
+                                } else if (fromUserInput() && !fromCommentPanel()) {
+                                    // 只记“由点击 / 触摸直接引起”的新增 View：红心如果是点一下生成一个，就会在这里；信息流预加载下一个视频的不记
+                                    logOnce("hv-seen:" + d, "双击后由触摸新增 View：" + d + " ← " + callers());
                                 }
                             } catch (Throwable ignored) {
                             }
@@ -150,6 +152,42 @@ final class CommentHook {
             });
         } catch (Throwable t) {
             DanmakuHook.status("挂接 View.setVisibility 失败：" + t);
+        }
+    }
+
+    private static volatile long lastDownT;
+    private static volatile float lastDownX, lastDownY;
+
+    /**
+     * 更早地开窗：抖音可能在 GestureDetector 的 onDoubleTap 之前，就在自己的 onTouch 里按“连点”生成红心（像直播点赞那样每点一下生成一个动画）。
+     * 所以在 Activity.dispatchTouchEvent（所有触摸的最前面）里自己判断“第二次按下”：与上一次按下间隔小于系统双击超时、位置相近，就立刻开窗。
+     */
+    private static void hookTouchGuard() {
+        try {
+            XposedBridge.hookMethod(Activity.class.getDeclaredMethod("dispatchTouchEvent", MotionEvent.class), new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        if (!DanmakuHook.cfg.dtapToComment || p.args == null || !(p.args[0] instanceof MotionEvent)) return;
+                        MotionEvent e = (MotionEvent) p.args[0];
+                        if (e.getActionMasked() != MotionEvent.ACTION_DOWN || e.getPointerCount() != 1) return;
+                        long t = e.getEventTime();
+                        float dx = e.getX() - lastDownX, dy = e.getY() - lastDownY;
+                        float lim = 100f * ((Activity) p.thisObject).getResources().getDisplayMetrics().density;
+                        long gap = t - lastDownT;
+                        if (gap >= 40 && gap <= android.view.ViewConfiguration.getDoubleTapTimeout() && dx * dx + dy * dy <= lim * lim) {
+                            dtapGuardUntil = android.os.SystemClock.uptimeMillis() + DTAP_GUARD_MS;
+                            logOnce("touch-guard", "第二次按下（触摸层）：已提前开窗");
+                        }
+                        lastDownT = t;
+                        lastDownX = e.getX();
+                        lastDownY = e.getY();
+                    } catch (Throwable ignored) {
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            DanmakuHook.status("挂接 Activity.dispatchTouchEvent 失败：" + t);
         }
     }
 
