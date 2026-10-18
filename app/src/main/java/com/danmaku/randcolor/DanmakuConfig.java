@@ -24,6 +24,8 @@ public final class DanmakuConfig {
     public boolean timeAlways = false;
     /** 时长文字相对抖音原位置的偏移，单位 dp。右、下为正。 */
     public int timeDx = 0, timeDy = 0;
+    /** 诊断浮层：屏幕左上角显示时间 View 的坐标、宽高、可见性（调试用）。 */
+    public boolean timeDebug = false;
 
     public String toText() {
         try {
@@ -34,6 +36,7 @@ public final class DanmakuConfig {
             p.setProperty("likeBtnToComment", String.valueOf(likeBtnToComment));
             p.setProperty("dtapToComment", String.valueOf(dtapToComment));
             p.setProperty("timeAlways", String.valueOf(timeAlways));
+            p.setProperty("timeDebug", String.valueOf(timeDebug));
             p.setProperty("timeDx", String.valueOf(timeDx));
             p.setProperty("timeDy", String.valueOf(timeDy));
             ByteArrayOutputStream bo = new ByteArrayOutputStream();
@@ -73,6 +76,7 @@ public final class DanmakuConfig {
         c.likeBtnToComment = Boolean.parseBoolean(p.getProperty("likeBtnToComment", "false").trim());
         c.dtapToComment = Boolean.parseBoolean(p.getProperty("dtapToComment", "false").trim());
         c.timeAlways = Boolean.parseBoolean(p.getProperty("timeAlways", "false").trim());
+        c.timeDebug = Boolean.parseBoolean(p.getProperty("timeDebug", "false").trim());
         c.timeDx = parseOffset(p.getProperty("timeDx", "0"));
         c.timeDy = parseOffset(p.getProperty("timeDy", "0"));
         try {
