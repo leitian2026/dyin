@@ -1,6 +1,7 @@
 package com.danmaku.randcolor;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
@@ -35,12 +36,11 @@ public class MainActivity extends Activity {
 
     private EditText etPkg;
     private Switch swEnabled, swLikeBtn, swDtap, swTime;
-    private LinearLayout segMode, segKey, segStep, statusCard;
+    private LinearLayout segMode, segKey, statusCard;
     private TextView tvOffset;
-    private int tDx, tDy;
-    private static final int[] STEPS = {2, 10, 40};
+    private int tX, tY;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private TextView tvStatus, btnPush;
+    private TextView tvStatus, btnPush, btnAdjust;
     private ScrollView scroll;
 
     @Override
@@ -133,16 +133,34 @@ public class MainActivity extends Activity {
         root.addView(section("视频时长常显"));
         LinearLayout tm = card();
         swTime = new Switch(this);
-        tm.addView(switchRow("视频时长一直显示", "在视频上自己画一行 00:12 / 03:45，播放时随进度走动，不用碰进度条；离开视频页自动隐藏", swTime));
+        tm.addView(switchRow("视频时长一直显示", "在视频上自己画一行 00:12 / 03:45，抖音任何界面都显示，播放时随进度走动；刷到直播或离开视频页自动隐藏", swTime));
         tm.addView(divider());
         tm.addView(tv("位置微调", 17, cText, true));
-        TextView td = tv("默认在屏幕正中，以此为起点移动（右、下为正，单位 dp）。点箭头走一格，长按连续移动；改完点下方「保存并应用」。", 13, cSub, false);
-        td.setPadding(0, dp(2), 0, dp(10));
+        TextView td = tv("点下面的按钮，会在抖音里弹出一个浮窗：两条滑动条（左边减、右边加），两端的 − / + 每点一下移动 2 像素，一边调一边看时长怎么动。点浮窗里的「完成」自动保存，回到本页会同步数值。需要 root。", 13, cSub, false);
+        td.setPadding(0, dp(2), 0, dp(12));
         tm.addView(td);
-        segStep = segmented("细（2）", "中（10）", "粗（40）");
-        setSeg(segStep, 1);
-        tm.addView(segStep);
-        tm.addView(dpad());
+        tvOffset = tv("", 14, cSub, false);
+        tvOffset.setTypeface(Typeface.MONOSPACE);
+        tvOffset.setPadding(0, 0, 0, dp(12));
+        tm.addView(tvOffset);
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        btnAdjust = pillButton("打开浮窗调整位置", true);
+        btnAdjust.setTextSize(16);
+        btnAdjust.setOnClickListener(v -> openAdjust());
+        btns.addView(btnAdjust, new LinearLayout.LayoutParams(0, dp(48), 1f));
+        TextView reset = pillButton("归零", false);
+        reset.setTextSize(16);
+        reset.setOnClickListener(v -> {
+            tX = 0;
+            tY = 0;
+            showOffset();
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("adjusting", false).apply();
+        });
+        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(dp(88), dp(48));
+        rl.leftMargin = dp(10);
+        btns.addView(reset, rl);
+        tm.addView(btns);
         root.addView(tm, cardLp());
 
         // ---- 状态（有内容才显示）
@@ -169,8 +187,8 @@ public class MainActivity extends Activity {
         swLikeBtn.setChecked(c.likeBtnToComment);
         swDtap.setChecked(c.dtapToComment);
         swTime.setChecked(c.timeAlways);
-        tDx = c.timeDx;
-        tDy = c.timeDy;
+        tX = c.timeX;
+        tY = c.timeY;
         showOffset();
         setSeg(segMode, c.mode == 1 ? 1 : 0);
         setSeg(segKey, c.keyByText ? 1 : 0);
@@ -184,8 +202,8 @@ public class MainActivity extends Activity {
         c.likeBtnToComment = swLikeBtn.isChecked();
         c.dtapToComment = swDtap.isChecked();
         c.timeAlways = swTime.isChecked();
-        c.timeDx = tDx;
-        c.timeDy = tDy;
+        c.timeX = tX;
+        c.timeY = tY;
         return c;
     }
 
@@ -227,89 +245,85 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
 
-    // ------------------------------------------------------------ 方向键
+    // ------------------------------------------------------------ 位置浮窗
 
-    private View dpad() {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setGravity(Gravity.CENTER_HORIZONTAL);
-        box.setPadding(0, dp(14), 0, 0);
-        box.addView(padRow(null, arrow("▲", 0, -1), null));
-        tvOffset = tv("", 13, cSub, false);
-        tvOffset.setGravity(Gravity.CENTER);
-        tvOffset.setTypeface(Typeface.MONOSPACE);
-        box.addView(padRow(arrow("◀", -1, 0), tvOffset, arrow("▶", 1, 0)));
-        box.addView(padRow(null, arrow("▼", 0, 1), null));
-        TextView reset = pillButton("归零", false);
-        reset.setTextSize(15);
-        reset.setOnClickListener(v -> {
-            tDx = 0;
-            tDy = 0;
-            showOffset();
-        });
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(120), dp(44));
-        lp.topMargin = dp(12);
-        box.addView(reset, lp);
-        return box;
-    }
-
-    private LinearLayout padRow(View l, View m, View r) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER);
-        View[] vs = {l, m, r};
-        for (View v : vs) {
-            if (v == null) v = new View(this);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(92), dp(56));
-            lp.setMargins(dp(3), dp(3), dp(3), dp(3));
-            row.addView(v, lp);
+    /** 把「弹出位置浮窗」的请求（timeAdjust=true）连同当前全部设置推给抖音，然后打开抖音。 */
+    private void openAdjust() {
+        swTime.setChecked(true);
+        DanmakuConfig c = read();
+        final String pkgs = etPkg.getText().toString().trim();
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("cfg", c.toText()).putString("pkg", pkgs).apply();
+        final List<String> list = DanmakuConfig.split(pkgs);
+        if (list.isEmpty()) {
+            showStatus("请先填目标包名", 2);
+            return;
         }
-        return row;
-    }
-
-    /** 方向键：按下走一格，按住 350ms 后每 70ms 再走一格，松手 / 取消就停。 */
-    private TextView arrow(String label, final int sx, final int sy) {
-        TextView t = tv(label, 22, cText, true);
-        t.setGravity(Gravity.CENTER);
-        t.setBackground(ripple(round(cField, 0, 16)));
-        final Runnable[] rep = new Runnable[1];
-        rep[0] = () -> {
-            nudge(sx, sy);
-            ui.postDelayed(rep[0], 70);
-        };
-        t.setOnTouchListener((v, e) -> {
-            switch (e.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(true);
-                    v.setPressed(true);
-                    nudge(sx, sy);
-                    ui.postDelayed(rep[0], 350);
-                    return true;
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    v.setPressed(false);
-                    ui.removeCallbacks(rep[0]);
-                    return true;
-                default:
-                    return true;
+        c.timeAdjust = true;
+        final String pushText = c.toText();
+        setBusy(btnAdjust, true, "正在打开…");
+        showStatus("正在推送…（首次会弹出 root 授权，请允许）", 0);
+        new Thread(() -> {
+            final StringBuilder sb = new StringBuilder();
+            String first = null;
+            for (String pkg : list) {
+                if (!RootShell.validPkg(pkg)) {
+                    sb.append("✗ ").append(pkg).append("：包名格式不对\n");
+                    continue;
+                }
+                RootShell.Result r = RootShell.pushConfig(pkg, pushText);
+                if (r.out.contains("__OK__")) {
+                    if (first == null) first = pkg;
+                } else if (r.out.contains("__NOPKG__")) {
+                    sb.append("✗ ").append(pkg).append("：").append(RootShell.nopkgMsg(r.out)).append('\n');
+                } else {
+                    sb.append("✗ ").append(pkg).append("：失败(").append(r.code).append(") ").append(r.err.trim()).append('\n');
+                }
             }
-        });
-        return t;
+            final String ok = first;
+            final String err = sb.toString();
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                setBusy(btnAdjust, false, "打开浮窗调整位置");
+                if (ok == null) {
+                    showStatus(err.isEmpty() ? "推送失败" : err, 2);
+                    return;
+                }
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("adjusting", true).putString("adjustPkg", ok).apply();
+                Intent i = getPackageManager().getLaunchIntentForPackage(ok);
+                if (i != null) {
+                    statusCard.setVisibility(View.GONE);
+                    startActivity(i);
+                } else {
+                    showStatus("已推送，但没找到 " + ok + " 的启动入口，请手动切到抖音，浮窗会自动弹出。", 1);
+                }
+            });
+        }).start();
     }
 
-    private void nudge(int sx, int sy) {
-        int step = STEPS[Math.max(0, Math.min(STEPS.length - 1, segIndex(segStep)))];
-        tDx = clampOffset(tDx + sx * step);
-        tDy = clampOffset(tDy + sy * step);
-        showOffset();
-    }
-
-    private static int clampOffset(int v) {
-        return Math.max(-2000, Math.min(2000, v));
+    /** 从抖音回到本页：把浮窗里调好的位置读回来，免得下次「保存并应用」把旧值推回去。 */
+    @Override
+    protected void onResume() {
+        super.onResume();
+        SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+        final String pkg = sp.getString("adjustPkg", "");
+        if (!sp.getBoolean("adjusting", false) || pkg.isEmpty()) return;
+        new Thread(() -> {
+            String text = RootShell.readConfig(pkg);
+            if (text == null) return;
+            final DanmakuConfig c = DanmakuConfig.fromText(text);
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                tX = c.timeX;
+                tY = c.timeY;
+                showOffset();
+                SharedPreferences sp2 = getSharedPreferences(PREFS, MODE_PRIVATE);
+                sp2.edit().putString("cfg", read().toText()).putBoolean("adjusting", false).apply();
+            });
+        }).start();
     }
 
     private void showOffset() {
-        if (tvOffset != null) tvOffset.setText("水平 " + signed(tDx) + "\n垂直 " + signed(tDy));
+        if (tvOffset != null) tvOffset.setText("当前位置  水平 " + signed(tX) + " px　垂直 " + signed(tY) + " px");
     }
 
     private static String signed(int v) {
