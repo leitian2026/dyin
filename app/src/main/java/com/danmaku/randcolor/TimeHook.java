@@ -342,6 +342,21 @@ final class TimeHook {
     // ------------------------------------------------------------ 应用 / 还原
 
     private static void apply(State s, View tv, View top, DanmakuConfig c) {
+        // 早期（布局还是 0x0）找到时 top 会退化成文字本身；现在布局出来了就换成外层小容器，
+        // 并把文字自己身上的偏移清掉——否则文字和容器各移一次，文字被容器裁掉一半
+        if (top == tv && tv instanceof TextView) {
+            View better = climb((TextView) tv);
+            if (better != tv) {
+                top = better;
+                s.top = new WeakReference<>(better);
+                lastTop = s.top;
+                s.origTop = -1;
+            }
+        }
+        if (tv != top) {
+            if (tv.getTranslationX() != 0f) tv.setTranslationX(0f);
+            if (tv.getTranslationY() != 0f) tv.setTranslationY(0f);
+        }
         float d = tv.getResources().getDisplayMetrics().density;
         float tx = c.timeDx * d, ty = c.timeDy * d;
         if (s.origTv < 0) s.origTv = tv.getVisibility();
@@ -380,6 +395,7 @@ final class TimeHook {
             if (a.getAlpha() < 1f) a.setAlpha(1f);
             up = a;
         }
+        whiten(top, new int[]{40}); // 时间文字（含「/ 总时长」）统一白色
         if (top.getTranslationX() != tx) top.setTranslationX(tx);
         if (top.getTranslationY() != ty) top.setTranslationY(ty);
         if (!s.unclipped && (c.timeDx != 0 || c.timeDy != 0)) {
@@ -398,6 +414,17 @@ final class TimeHook {
         }
         s.applied = true;
         anyApplied = true;
+    }
+
+    private static void whiten(View v, int[] budget) {
+        if (budget[0]-- <= 0) return;
+        if (v instanceof TextView) {
+            TextView t = (TextView) v;
+            if (t.getCurrentTextColor() != 0xFFFFFFFF) t.setTextColor(0xFFFFFFFF);
+        } else if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) whiten(g.getChildAt(i), budget);
+        }
     }
 
     /** 关掉开关后还原：偏移归零，可见性回到我们第一次碰它之前的状态。 */
