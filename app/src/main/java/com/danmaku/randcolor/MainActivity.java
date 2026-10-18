@@ -46,7 +46,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        setTitle("弹幕随机色");
+        setTitle("dyin");
         dark = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
         initPalette();
         styleSystemBars();
@@ -66,7 +66,7 @@ public class MainActivity extends Activity {
         setContentView(page);
 
         // ---- 标题
-        TextView title = tv("弹幕随机色", 30, cText, true);
+        TextView title = tv("dyin", 30, cText, true);
         title.setPadding(dp(4), 0, 0, 0);
         root.addView(title);
         TextView sub = tv("弹幕随机颜色 · 点赞改为打开评论 · 视频时长常显", 14, cSub, false);
