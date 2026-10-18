@@ -12,7 +12,6 @@ import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
-import java.lang.reflect.Method;
 import java.util.Set;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -21,38 +20,34 @@ import de.robv.android.xposed.XposedBridge;
 /**
  * 视频时长常显：自己画一个 "00:12 / 03:45"，不再借用抖音的时间控件。
  *
- * 依据 TextRec 的追踪（40.7.0）：
- *  - PMPlayListenerDispatcherV2#onPlayProgressChange：播放时每次进度更新都在主线程调用（名字没混淆）。
- *    它的调用链里会调用 TTVideoEngine#getDuration()，所以在它执行期间被调用的那个 TTVideoEngine 就是当前正在播的。
- *  - TTVideoEngine#getCurrentPlaybackTime() / getDuration()：公开方法，返回毫秒。
+ * 依据 TextRec 的追踪（40.7.0）：SimPlayer 的公共监听层
+ *   com.ss.android.ugc.aweme.video.simplayer.listener.base.OnUIPlayListenerDelegate#onPlayProgressChange
+ * 每次进度更新都在主线程调用，有两个重载：(float 百分比) 和 (String 视频id, long 位置ms, long 总时长ms)。
+ * 后一个直接带着位置和时长，例如 ("7697697250122729935", 638, 25727)。信息流专用的 PMPlayListenerDispatcherV2
+ * 只是它的下游，所以改钩这一层（不再认播放器引擎、不依赖信息流）。
  *
  * 做法（没有轮询，全部由抖音自己的回调驱动）：
- *  1) 进度回调执行前后各打一个标记；标记期间 TTVideoEngine#getDuration / getCurrentPlaybackTime 被调用，就记住这个引擎。
- *  2) 进度回调结束后，用记住的引擎读当前位置和总时长，格式化成 mm:ss，只在秒数变化时才 setText。
+ *  1) 钩 onPlayProgressChange，读 (位置, 总时长)；同一个位置会经过好几个包装监听器重复到达，按位置去重。
+ *  2) 格式化成 mm:ss，只在文字变化时才 setText。
  *  3) 文字是一个独立的 TextView，加在当前 Activity 的最上层，默认在屏幕正中，按设置里的偏移（dp）移动，不拦截触摸。
- *  4) 可见性：进度条（ProSeekBarView#setProgress 的 this）还在屏幕上就保持显示（暂停时也不消失），
- *     离开视频页（进度条不可见 / 脱离窗口）后隐藏。没抓到进度条时，3 秒没有进度回调就隐藏。
+ *  4) 可见性：3 秒内收到过进度回调就显示；没有回调（暂停等）时，进度条（ProSeekBarView#setProgress 的 this）
+ *     还在屏幕上就继续显示，离开视频页后隐藏；没抓到进度条时，3 秒没有回调就隐藏。
  */
 final class TimeHook {
     private TimeHook() {}
 
     /** 版本相关（40.7.0）。 */
-    private static final String PM = "com.ss.android.ugc.aweme.feed.controller.refactor.impl_pm.PMPlayListenerDispatcherV2";
-    private static final String PM_METHOD = "onPlayProgressChange";
-    private static final String ENGINE = "com.ss.ttvideoengine.TTVideoEngine";
+    private static final String DELEGATE = "com.ss.android.ugc.aweme.video.simplayer.listener.base.OnUIPlayListenerDelegate";
+    private static final String PROGRESS = "onPlayProgressChange";
     private static final String SEEKBAR = "com.ss.android.ugc.aweme.o.seekbar.views.seekbar.ProSeekBarView";
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
-    private static volatile boolean progressHooked, engineHooked, seekHooked;
+    private static volatile boolean progressHooked, seekHooked;
     private static int misses;
 
-    /** 只在主线程读写。 */
-    private static boolean inProgress;
-    private static WeakReference<Object> engineRef = new WeakReference<>(null);
     private static WeakReference<View> seekRef = new WeakReference<>(null);
-    private static Class<?> mCls;
-    private static Method mPos, mDur;
+    private static long lastPos = Long.MIN_VALUE, lastDur = Long.MIN_VALUE;
     private static boolean loggedOk;
 
     private static WeakReference<TextView> viewRef = new WeakReference<>(null);
@@ -65,26 +60,19 @@ final class TimeHook {
 
     /** 目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到都挂上。 */
     static void tryHook(ClassLoader cl) {
-        if (cl == null || (progressHooked && engineHooked && seekHooked)) return;
+        if (cl == null || (progressHooked && seekHooked)) return;
         attempt(cl);
-        if (!(progressHooked && engineHooked)) {
+        if (!progressHooked) {
             ClassLoader ctx = Thread.currentThread().getContextClassLoader();
             if (ctx != null && ctx != cl) attempt(ctx);
         }
-        if (!(progressHooked && engineHooked) && ++misses == 6) {
-            XposedBridge.log("[DanmakuColor] time hook: classes not found yet (progress=" + progressHooked
-                    + ", engine=" + engineHooked + ")");
+        if (!progressHooked && ++misses == 6) {
+            XposedBridge.log("[DanmakuColor] time hook: classes not found yet (progress=" + progressHooked + ")");
         }
     }
 
     private static void attempt(ClassLoader cl) {
-        if (!progressHooked) progressHooked = hookAll(cl, PM, PM_METHOD, new ProgressHook());
-        if (!engineHooked) {
-            CaptureHook cap = new CaptureHook();
-            boolean a = hookAll(cl, ENGINE, "getDuration", cap);
-            boolean b = hookAll(cl, ENGINE, "getCurrentPlaybackTime", cap);
-            engineHooked = a || b;
-        }
+        if (!progressHooked) progressHooked = hookAll(cl, DELEGATE, PROGRESS, new ProgressHook());
         if (!seekHooked) seekHooked = hookAll(cl, SEEKBAR, "setProgress", new SeekHook());
     }
 
@@ -111,31 +99,17 @@ final class TimeHook {
 
     // ------------------------------------------------------------ 钩子
 
-    /** 进度回调：前面打标记，后面读时间并更新显示。 */
+    /** 进度回调：(String 视频id, long 位置ms, long 总时长ms) 这个重载直接带着时间；float 百分比那个重载忽略。 */
     private static final class ProgressHook extends XC_MethodHook {
         @Override
-        protected void beforeHookedMethod(MethodHookParam p) {
-            if (isMain()) inProgress = true;
-        }
-
-        @Override
         protected void afterHookedMethod(MethodHookParam p) {
-            if (!isMain()) return;
-            inProgress = false;
             try {
-                tick();
+                Object[] a = p.args;
+                if (a == null || a.length != 3 || !(a[1] instanceof Number) || !(a[2] instanceof Number)) return;
+                if (!isMain()) return;
+                onProgress(((Number) a[1]).longValue(), ((Number) a[2]).longValue());
             } catch (Throwable ignored) {
             }
-        }
-    }
-
-    /** 进度回调执行期间，TTVideoEngine 的这两个读数方法被谁调用，谁就是当前引擎。 */
-    private static final class CaptureHook extends XC_MethodHook {
-        @Override
-        protected void afterHookedMethod(MethodHookParam p) {
-            if (!inProgress || !isMain()) return;
-            Object o = p.thisObject;
-            if (o != null && engineRef.get() != o) engineRef = new WeakReference<>(o);
         }
     }
 
@@ -148,29 +122,16 @@ final class TimeHook {
         }
     }
 
-    // ------------------------------------------------------------ 读时间 + 显示
+    // ------------------------------------------------------------ 显示
 
-    private static void tick() throws Throwable {
+    private static void onProgress(long pos, long dur) {
         if (!DanmakuHook.cfg.timeAlways) {
             removeView();
             return;
         }
-        Object e = engineRef.get();
-        if (e == null) return;
-        if (mCls != e.getClass()) {
-            mCls = e.getClass();
-            mPos = mDur = null;
-            try {
-                mPos = mCls.getMethod("getCurrentPlaybackTime");
-                mDur = mCls.getMethod("getDuration");
-            } catch (Throwable t) {
-                XposedBridge.log("[DanmakuColor] time: engine methods missing " + t);
-                return;
-            }
-        }
-        if (mPos == null || mDur == null) return;
-        long pos = num(mPos.invoke(e, (Object[]) null));
-        long dur = num(mDur.invoke(e, (Object[]) null));
+        if (pos == lastPos && dur == lastDur) return; // 同一个位置经过多个包装监听器重复到达
+        lastPos = pos;
+        lastDur = dur;
         if (!loggedOk) {
             loggedOk = true;
             XposedBridge.log("[DanmakuColor] time ok: pos=" + pos + "ms dur=" + dur + "ms");
@@ -178,10 +139,6 @@ final class TimeHook {
         if (pos < 0) pos = 0;
         if (dur > 0 && pos > dur) pos = dur;
         show(fmt(pos) + " / " + (dur > 0 ? fmt(dur) : "--:--"));
-    }
-
-    private static long num(Object o) {
-        return o instanceof Number ? ((Number) o).longValue() : -1;
     }
 
     private static String fmt(long ms) {
@@ -261,12 +218,10 @@ final class TimeHook {
             try {
                 TextView t = viewRef.get();
                 if (t == null || t.getVisibility() != View.VISIBLE) return;
-                View sb = seekRef.get();
-                boolean alive;
-                if (sb != null) {
-                    alive = sb.isAttachedToWindow() && sb.isShown() && sb.getGlobalVisibleRect(TMP);
-                } else {
-                    alive = System.currentTimeMillis() - lastTickAt < 3000; // 没抓到进度条：看有没有进度回调
+                boolean alive = System.currentTimeMillis() - lastTickAt < 3000; // 正在播放：有进度回调
+                if (!alive) {
+                    View sb = seekRef.get(); // 暂停等没有回调的情况：进度条还在屏幕上就继续显示
+                    alive = sb != null && sb.isAttachedToWindow() && sb.isShown() && sb.getGlobalVisibleRect(TMP);
                 }
                 if (alive && DanmakuHook.cfg.timeAlways) {
                     MAIN.postDelayed(this, 1000);
