@@ -22,8 +22,10 @@ public final class DanmakuConfig {
     public boolean dtapToComment = false;
     /** 视频时长一直显示（自己画一行 00:12 / 03:45）。 */
     public boolean timeAlways = false;
-    /** 时长文字相对屏幕正中的偏移，单位 dp。右、下为正。 */
-    public int timeDx = 0, timeDy = 0;
+    /** 时长文字相对屏幕正中的偏移，单位 px。右、下为正。（1.16 起由 dp 改为 px，键名也换了，旧值不再使用） */
+    public int timeX = 0, timeY = 0;
+    /** 一次性请求：抖音回到前台时弹出「位置浮窗」，弹出后立即被抖音清掉。 */
+    public boolean timeAdjust = false;
     /** 已废弃（1.15 起没有作用，键保留以兼容旧配置）。 */
     public boolean timeDebug = false;
 
@@ -37,8 +39,9 @@ public final class DanmakuConfig {
             p.setProperty("dtapToComment", String.valueOf(dtapToComment));
             p.setProperty("timeAlways", String.valueOf(timeAlways));
             p.setProperty("timeDebug", String.valueOf(timeDebug));
-            p.setProperty("timeDx", String.valueOf(timeDx));
-            p.setProperty("timeDy", String.valueOf(timeDy));
+            p.setProperty("timeX", String.valueOf(timeX));
+            p.setProperty("timeY", String.valueOf(timeY));
+            p.setProperty("timeAdjust", String.valueOf(timeAdjust));
             ByteArrayOutputStream bo = new ByteArrayOutputStream();
             p.store(bo, null);
             return new String(bo.toByteArray(), StandardCharsets.ISO_8859_1);
@@ -77,8 +80,9 @@ public final class DanmakuConfig {
         c.dtapToComment = Boolean.parseBoolean(p.getProperty("dtapToComment", "false").trim());
         c.timeAlways = Boolean.parseBoolean(p.getProperty("timeAlways", "false").trim());
         c.timeDebug = Boolean.parseBoolean(p.getProperty("timeDebug", "false").trim());
-        c.timeDx = parseOffset(p.getProperty("timeDx", "0"));
-        c.timeDy = parseOffset(p.getProperty("timeDy", "0"));
+        c.timeX = parseOffset(p.getProperty("timeX", "0"));
+        c.timeY = parseOffset(p.getProperty("timeY", "0"));
+        c.timeAdjust = Boolean.parseBoolean(p.getProperty("timeAdjust", "false").trim());
         try {
             c.mode = Integer.parseInt(p.getProperty("mode", "0").trim()) == 1 ? 1 : 0;
         } catch (Throwable t) {
@@ -88,7 +92,7 @@ public final class DanmakuConfig {
 
     private static int parseOffset(String v) {
         try {
-            return Math.max(-2000, Math.min(2000, Integer.parseInt(v.trim())));
+            return Math.max(-4000, Math.min(4000, Integer.parseInt(v.trim())));
         } catch (Throwable t) {
             return 0;
         }
