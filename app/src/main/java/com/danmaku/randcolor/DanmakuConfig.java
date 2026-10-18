@@ -9,13 +9,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 
-/** 配置：模块界面写出，目标 App 里的 Hook 读取。两边共用同一个类。默认值 = 开启 + 鲜艳随机 + 按弹幕对象固定颜色。 */
+/** 配置：模块界面写出，目标 App 里的 Hook 读取。两边共用同一个类。默认值 = 开启 + 鲜艳随机（颜色按文字内容固定）。 */
 public final class DanmakuConfig {
     public boolean enabled = true;
     /** 0 = 鲜艳（高饱和高亮度）  1 = 任意（含浅色/粉彩） */
     public int mode = 0;
-    /** false = 每个文字对象固定一个颜色；true = 相同文字固定同一个颜色 */
-    public boolean keyByText = false;
+    /** 已废弃：现在始终按文字内容固定颜色（相同文字同色）。保留键只是为了兼容旧配置文件。 */
+    public boolean keyByText = true;
     /** 点右侧爱心按钮时，不点赞，改为打开评论。 */
     public boolean likeBtnToComment = false;
     /** 双击视频时，不点赞、不出红心，改为打开评论。 */
@@ -72,7 +72,7 @@ public final class DanmakuConfig {
 
     private static void fill(DanmakuConfig c, Properties p) {
         c.enabled = Boolean.parseBoolean(p.getProperty("enabled", "true").trim());
-        c.keyByText = Boolean.parseBoolean(p.getProperty("keyByText", "false").trim());
+        c.keyByText = Boolean.parseBoolean(p.getProperty("keyByText", "true").trim());
         c.likeBtnToComment = Boolean.parseBoolean(p.getProperty("likeBtnToComment", "false").trim());
         c.dtapToComment = Boolean.parseBoolean(p.getProperty("dtapToComment", "false").trim());
         c.timeAlways = Boolean.parseBoolean(p.getProperty("timeAlways", "false").trim());
