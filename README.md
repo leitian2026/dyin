@@ -13,17 +13,19 @@
 1. LSPosed 启用模块，作用域勾选抖音，强杀抖音重开。
 2. 打开模块设置，点「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
+## 1.15.1：时长改钩 SimPlayer 公共层
+（同 1.15.0 的显示方式，数据来源见下）
+
 ## 1.15.0：视频时长改成自己画（不再借用抖音的时间控件）
 - 旧做法（1.13～1.14.3）：让抖音拖动进度条时才出现的那行时间一直显示。问题：文字只在拖动时更新，播放时是不走的死数字，而且依赖大量混淆名（`X.0qVI` / `X.0qVF` 等），换版本就坏。已全部删除。
 - 新做法：往当前 Activity 最上层放一个独立 TextView（白字黑描边，20sp，不拦截触摸），默认在屏幕正中，用设置页的方向键偏移（单位 dp，右、下为正）。
-- 数据来源（TextRec 追踪，40.7.0，全是没混淆的名字）：
-  - `PMPlayListenerDispatcherV2#onPlayProgressChange`：播放时每次进度更新在主线程调用，作为刷新时机；
-  - `TTVideoEngine#getCurrentPlaybackTime()` / `getDuration()`：毫秒。进度回调执行期间被调用的那个 `TTVideoEngine` 就是当前正在播的，记住它，回调结束后读位置和时长。
+- 数据来源（TextRec 追踪，40.7.0，全是没混淆的名字）：`OnUIPlayListenerDelegate#onPlayProgressChange`（`com.ss.android.ugc.aweme.video.simplayer.listener.base`，SimPlayer 的公共监听层，播放时每次进度更新在主线程调用）。它有两个重载：`(float 百分比)` 和 `(String 视频id, long 位置ms, long 总时长ms)`，后者直接带时间，例如 `("7697697250122729935", 638, 25727)`。同一个位置会经过好几个包装监听器（`ManualResolutionSwitchMaskingPlayListener`、`BufferOptListener`、`ProgressOptListener`……）重复到达，按位置去重。
+- 1.15.0 初版曾钩信息流专用的 `PMPlayListenerDispatcherV2` 再去认 `TTVideoEngine` 读数，有的视频不显示（认不出引擎 / 不走信息流这一层）；现在改钩上面这一层，不再需要认引擎。
 - 刷新：只在显示的秒数变化时才 `setText`；没有轮询。
-- 显示 / 隐藏：`ProSeekBarView#setProgress` 的 `this` 作为"还在视频页"的标志——进度条还在屏幕上就一直显示（暂停也不消失），离开视频页后隐藏；每秒检查一次，隐藏后不再排队。没抓到进度条时，3 秒没有进度回调就隐藏。
+- 显示 / 隐藏：3 秒内收到过进度回调就显示；没有回调（暂停等）时，用 `ProSeekBarView#setProgress` 的 `this` 判断"还在视频页"——进度条还在屏幕上就继续显示，离开视频页后隐藏；每秒检查一次，隐藏后不再排队。没抓到进度条时，3 秒没有回调就隐藏。
 - 去掉了诊断浮层开关（`timeDebug` 配置键保留但不再使用）。
 - LSPosed 日志：第一次读到时间时写一行 `[DanmakuColor] time ok: pos=… dur=…`；类找不到时写 `time hook: classes not found yet`。
-- 版本相关：`TimeHook.PM` / `PM_METHOD` / `ENGINE` / `SEEKBAR`。
+- 版本相关：`TimeHook.DELEGATE` / `PROGRESS` / `SEEKBAR`。
 - 没有在真机上验证过；这版也只做过语法检查。
 
 ## 1.11：省电精简
@@ -40,7 +42,7 @@
 - 如果双击后还是点赞了或出了红心，说明还有别的入口，把现象告诉我；1.11.1 是旧方案，可以回退。
 
 ## 抖音版本相关（换版本后可能要改）
-- `TimeHook.PM` / `PM_METHOD` / `ENGINE` / `SEEKBAR`：时长显示用到的进度回调、播放器引擎、进度条类名。
+- `TimeHook.DELEGATE` / `PROGRESS` / `SEEKBAR`：时长显示用到的进度监听层和进度条类名。
 - `CommentHook.DIGG_CLICK_METHOD`（`LJJJJJL`）：爱心按钮点击入口。
 - `BaseListFragmentPanel#LLLIILIL(MotionEvent)`：双击的统一入口（红心和点赞都在它下面）。
 - 评论按钮靠 contentDescription「评论N，按钮」查找。
