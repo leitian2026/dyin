@@ -1,9 +1,15 @@
 package com.danmaku.randcolor;
 
+import android.app.Activity;
+import android.graphics.Rect;
+import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.os.Looper;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
@@ -45,6 +51,12 @@ final class TimeHook {
     private static volatile boolean frameHooked, showHooked, anyApplied, loggedOk;
     private static int misses;
 
+    // 诊断浮层用：最近一次找到的时间 View、状态说明
+    private static volatile String lastNote = "还没收到时间回调（没播放视频？）";
+    private static WeakReference<View> lastTv, lastTop;
+    private static WeakReference<TextView> dbgView;
+    private static int dbgTick;
+
     /** 每个时间组件实例一份状态（每个视频页一个组件），弱引用，页面回收后自动消失。 */
     private static final WeakHashMap<Object, State> STATES = new WeakHashMap<>();
 
@@ -53,7 +65,8 @@ final class TimeHook {
         DanmakuConfig cfgRef;
         int tick, attempts;
         int origTv = -1, origTop = -1;
-        boolean failed, applied, unclipped;
+        boolean failed, applied, unclipped, dbgBg;
+        Drawable origBg;
     }
 
     // ------------------------------------------------------------ 安装
@@ -115,7 +128,9 @@ final class TimeHook {
         protected void afterHookedMethod(MethodHookParam p) {
             try {
                 DanmakuConfig c = DanmakuHook.cfg;
+                if (c.timeDebug && (++dbgTick & 15) == 1) debugShow(CommentHook.top.get());
                 if (!c.timeAlways) {
+                    lastNote = "开关没开（设置页「视频时长一直显示」）";
                     if (anyApplied) restoreAll();
                     return;
                 }
@@ -135,12 +150,16 @@ final class TimeHook {
                 }
                 if (s.failed) return;
                 s.tick++;
+                if (s.tv == null) lastNote = "收到回调，正在找时间 View（第 " + s.attempts + " 次）";
 
                 View tv = s.tv == null ? null : s.tv.get();
                 View top = s.top == null ? null : s.top.get();
                 if (tv != null && top != null) {
                     // 已找到：配置没变就每 16 次回调才复查一次可见性
                     if (s.cfgRef == c && (s.tick & 15) != 0) return;
+                    lastTv = s.tv;
+                    lastTop = s.top;
+                    lastNote = "已找到并套用";
                     apply(s, tv, top, c);
                     s.cfgRef = c;
                     return;
@@ -151,19 +170,25 @@ final class TimeHook {
                 s.attempts++;
                 View[] f = locate(self, s.tick);
                 if (f == null) {
+                    lastNote = "没找到时间 View（已试 " + s.attempts + " 次）";
                     if (s.attempts >= 8) {
                         s.failed = true;
+                        lastNote = "放弃：组件里没找到时间 View";
                         XposedBridge.log("[DanmakuColor] time view not found, observer=" + self.getClass().getName());
                     }
                     return;
                 }
                 s.tv = new WeakReference<>(f[0]);
                 s.top = new WeakReference<>(f[1]);
+                lastTv = s.tv;
+                lastTop = s.top;
+                lastNote = "已找到并套用";
                 if (!loggedOk) {
                     loggedOk = true;
                     CharSequence t = f[0] instanceof TextView ? ((TextView) f[0]).getText() : null;
                     XposedBridge.log("[DanmakuColor] time view ok: " + f[0].getClass().getName()
-                            + " text=\"" + t + "\" top=" + f[1].getClass().getName());
+                            + " text=\"" + t + "\" top=" + f[1].getClass().getName()
+                            + " | " + describe(f[0]) + " | top: " + describe(f[1]));
                 }
                 apply(s, f[0], f[1], c);
                 s.cfgRef = c;
@@ -196,6 +221,16 @@ final class TimeHook {
             s.unclipped = true;
             unclip(top);
         }
+        // 诊断：给它涂半透明红底，文字是空的 / 透明时也能看见这块区域
+        if (c.timeDebug && !s.dbgBg) {
+            s.dbgBg = true;
+            s.origBg = top.getBackground();
+            top.setBackgroundColor(0x66FF0000);
+        } else if (!c.timeDebug && s.dbgBg) {
+            s.dbgBg = false;
+            top.setBackground(s.origBg);
+            s.origBg = null;
+        }
         s.applied = true;
         anyApplied = true;
     }
@@ -211,6 +246,11 @@ final class TimeHook {
                 View tv = s.tv == null ? null : s.tv.get();
                 View top = s.top == null ? null : s.top.get();
                 if (top != null) {
+                    if (s.dbgBg) {
+                        s.dbgBg = false;
+                        top.setBackground(s.origBg);
+                        s.origBg = null;
+                    }
                     top.setTranslationX(0f);
                     top.setTranslationY(0f);
                     if (s.origTop > 0) top.setVisibility(s.origTop);
@@ -232,6 +272,98 @@ final class TimeHook {
             g.setClipToPadding(false);
             pp = g.getParent();
         }
+    }
+
+    // ------------------------------------------------------------ 诊断浮层
+
+    /** 回到前台时刷新（也负责在关掉诊断后把浮层拿掉）。 */
+    static void onResume(Activity a) {
+        debugShow(a);
+    }
+
+    /** 在当前 Activity 的最上层放一小块文字：它是独立的 TextView，不依赖抖音的时间 View 显不显示。 */
+    static void debugShow(Activity a) {
+        try {
+            if (Looper.myLooper() != Looper.getMainLooper()) return;
+            TextView t = dbgView == null ? null : dbgView.get();
+            if (!DanmakuHook.cfg.timeDebug || a == null) {
+                if (t != null && t.getParent() instanceof ViewGroup) ((ViewGroup) t.getParent()).removeView(t);
+                return;
+            }
+            if (t != null && t.getContext() != a) { // 换了 Activity：旧的拿掉重建
+                if (t.getParent() instanceof ViewGroup) ((ViewGroup) t.getParent()).removeView(t);
+                t = null;
+            }
+            ViewGroup decor = (ViewGroup) a.getWindow().getDecorView();
+            float d = a.getResources().getDisplayMetrics().density;
+            if (t == null) {
+                t = new TextView(a);
+                t.setTextSize(10f);
+                t.setTypeface(Typeface.MONOSPACE);
+                t.setTextColor(0xFF66FF99);
+                t.setBackgroundColor(0xCC000000);
+                int pad = (int) (6 * d);
+                t.setPadding(pad, pad, pad, pad);
+                dbgView = new WeakReference<>(t);
+            }
+            if (t.getParent() != decor) {
+                if (t.getParent() instanceof ViewGroup) ((ViewGroup) t.getParent()).removeView(t);
+                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
+                lp.topMargin = (int) (90 * d);
+                decor.addView(t, lp);
+            } else if (decor.indexOfChild(t) != decor.getChildCount() - 1) {
+                t.bringToFront();
+            }
+            t.setText(buildInfo(decor));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static String buildInfo(View decor) {
+        StringBuilder sb = new StringBuilder("[时长诊断]\n");
+        sb.append("钩子 frame=").append(frameHooked).append(" show=").append(showHooked).append('\n');
+        sb.append("状态 ").append(lastNote).append('\n');
+        sb.append("屏幕 ").append(decor.getWidth()).append('x').append(decor.getHeight()).append('\n');
+        View tv = lastTv == null ? null : lastTv.get();
+        View top = lastTop == null ? null : lastTop.get();
+        if (tv == null || top == null) return sb.append("还没有时间 View").toString();
+        sb.append("文字 ").append(describe(tv));
+        if (tv instanceof TextView) sb.append("\n  内容 \"").append(((TextView) tv).getText()).append('"');
+        if (top != tv) sb.append("\n外层 ").append(describe(top));
+        sb.append("\n偏移 ").append((int) top.getTranslationX()).append(',').append((int) top.getTranslationY()).append("px");
+        sb.append(hiddenAncestor(top));
+        return sb.toString();
+    }
+
+    private static String describe(View v) {
+        int[] l = new int[2];
+        v.getLocationOnScreen(l);
+        boolean on = v.getGlobalVisibleRect(new Rect());
+        String n = v.getClass().getName();
+        n = n.substring(n.lastIndexOf('.') + 1);
+        return n + " " + v.getWidth() + "x" + v.getHeight() + " @" + l[0] + "," + l[1]
+                + " " + visName(v.getVisibility()) + " a=" + v.getAlpha() + " shown=" + v.isShown() + " 屏内=" + on;
+    }
+
+    private static String visName(int vis) {
+        return vis == View.VISIBLE ? "VISIBLE" : vis == View.INVISIBLE ? "INVISIBLE" : "GONE";
+    }
+
+    /** 从这个 View 往上，找第一个不可见 / 全透明 / 尺寸为 0 的祖先：「看不到」多半卡在这里。 */
+    private static String hiddenAncestor(View v) {
+        View cur = v;
+        for (int i = 0; i < 14 && cur != null; i++) {
+            if (cur.getVisibility() != View.VISIBLE || cur.getAlpha() == 0f
+                    || (cur.getWidth() == 0 && cur.getHeight() == 0 && cur.isLaidOut())) {
+                String n = cur.getClass().getName();
+                n = n.substring(n.lastIndexOf('.') + 1);
+                return "\n卡住: 往上第 " + i + " 层 " + n + " " + visName(cur.getVisibility())
+                        + " a=" + cur.getAlpha() + " " + cur.getWidth() + "x" + cur.getHeight();
+            }
+            ViewParent pp = cur.getParent();
+            cur = pp instanceof View ? (View) pp : null;
+        }
+        return "\n往上 14 层都可见";
     }
 
     // ------------------------------------------------------------ 找时间 View
