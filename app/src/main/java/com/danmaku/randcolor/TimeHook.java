@@ -80,6 +80,9 @@ final class TimeHook {
         int origTv = -1, origTop = -1;
         boolean failed, applied, unclipped, dbgBg;
         Drawable origBg;
+        /** 往上多放开的那几层祖先（加载出来的 LinearLayout 之类）和它们原来的可见性，关开关时还原。 */
+        final ArrayList<WeakReference<View>> ancV = new ArrayList<>();
+        final ArrayList<Integer> ancO = new ArrayList<>();
     }
 
     // ------------------------------------------------------------ 安装
@@ -354,6 +357,29 @@ final class TimeHook {
             if (!(pp instanceof View)) break;
             v = (View) pp;
         }
+        // 文字外面加载出来的那层容器（诊断里常见 LinearLayout GONE 0x0）本身是隐藏的：往上最多再放开 3 层，
+        // 碰到已经可见且有尺寸的祖先就停，不会去动页面级的大容器
+        View up = top;
+        for (int i = 0; i < 3; i++) {
+            ViewParent pp = up.getParent();
+            if (!(pp instanceof View)) break;
+            View a = (View) pp;
+            if (a.getVisibility() == View.VISIBLE && a.getAlpha() >= 1f && a.getWidth() > 0) break;
+            boolean known = false;
+            for (WeakReference<View> r : s.ancV) {
+                if (r.get() == a) {
+                    known = true;
+                    break;
+                }
+            }
+            if (!known) {
+                s.ancV.add(new WeakReference<>(a));
+                s.ancO.add(a.getVisibility());
+            }
+            if (a.getVisibility() != View.VISIBLE) a.setVisibility(View.VISIBLE);
+            if (a.getAlpha() < 1f) a.setAlpha(1f);
+            up = a;
+        }
         if (top.getTranslationX() != tx) top.setTranslationX(tx);
         if (top.getTranslationY() != ty) top.setTranslationY(ty);
         if (!s.unclipped && (c.timeDx != 0 || c.timeDy != 0)) {
@@ -395,6 +421,12 @@ final class TimeHook {
                     if (s.origTop > 0) top.setVisibility(s.origTop);
                 }
                 if (tv != null && tv != top && s.origTv > 0) tv.setVisibility(s.origTv);
+                for (int i = s.ancV.size() - 1; i >= 0; i--) {
+                    View a = s.ancV.get(i).get();
+                    if (a != null && s.ancO.get(i) > 0) a.setVisibility(s.ancO.get(i));
+                }
+                s.ancV.clear();
+                s.ancO.clear();
             }
         }
     }
