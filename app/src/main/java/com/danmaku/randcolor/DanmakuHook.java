@@ -176,7 +176,7 @@ final class DanmakuHook {
                 long v = (Long) a[1];
                 if ((v & 0x3FL) != 0L) return; // 只处理 sRGB；Unspecified/其他色彩空间不碰
 
-                int rgb = pick(keyOf(p.thisObject, c), c.mode);
+                int rgb = pick(keyOf(p.thisObject), c.mode);
                 int alpha = (int) ((v >>> 56) & 0xFF);           // 保留原透明度
                 int argb = (alpha << 24) | rgb;
                 a[1] = (((long) argb) & 0xFFFFFFFFL) << 32;      // Compose 的 sRGB Color：ARGB 放在高 32 位
@@ -185,15 +185,19 @@ final class DanmakuHook {
         }
     }
 
-    private static int keyOf(Object paragraph, DanmakuConfig c) {
-        if (c.keyByText) {
-            String t = textOf(paragraph);
-            if (t != null) return t.hashCode();
-        }
+    /**
+     * 颜色的依据：弹幕文字。弹幕是画进缓存层里的，每条只在层被重新录制时才会再走一次 paint，
+     * 而重新录制时 MultiParagraph 对象可能是新建的，按对象身份取色就会换色（弹幕多时表现为闪几下）。
+     * 文字不会变，所以同一条弹幕每次都是同一个颜色；代价是相同文字同色。
+     * 文字读不到（字段被混淆）时才退回按对象。
+     */
+    private static int keyOf(Object paragraph) {
+        String t = textOf(paragraph);
+        if (t != null) return t.hashCode();
         return System.identityHashCode(paragraph);
     }
 
-    /** 读取弹幕文字（用于"相同文字同色"）。字段被混淆读不到时返回 null，退回按对象。 */
+    /** 读取弹幕文字。字段被混淆读不到时返回 null，退回按对象。 */
     private static String textOf(Object paragraph) {
         try {
             if (!textInit) {
@@ -224,7 +228,7 @@ final class DanmakuHook {
         return x;
     }
 
-    /** 同一个 key 永远得到同一个颜色，所以弹幕滚动时每帧重绘不会闪。HSV→RGB 手算，不分配对象（每帧每条弹幕都会走到这里）。 */
+    /** 同一个 key 永远得到同一个颜色，所以重绘不会换色。HSV→RGB 手算，不分配对象（每帧每条弹幕都会走到这里）。 */
     private static int pick(int key, int mode) {
         int m = mix(key);
         float h = ((m & 0xFFFF) % 360) / 60f;
