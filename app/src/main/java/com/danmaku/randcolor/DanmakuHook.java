@@ -3,6 +3,8 @@ package com.danmaku.randcolor;
 import android.app.Activity;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.lang.reflect.Method;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -56,6 +58,21 @@ final class DanmakuHook {
             if (m == cfgMtime) return;
             cfgMtime = m;
             cfg = (m == 0) ? new DanmakuConfig() : DanmakuConfig.read(cfgFile);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 把当前配置写回自己的数据目录（位置浮窗调整后用；文件属主本来就是抖音自己，能直接写）。 */
+    static void saveCfg() {
+        try {
+            File f = cfgFile;
+            if (f == null) return;
+            File dir = f.getParentFile();
+            if (dir != null && !dir.exists()) dir.mkdirs();
+            try (FileOutputStream o = new FileOutputStream(f, false)) {
+                o.write(cfg.toText().getBytes(StandardCharsets.ISO_8859_1));
+            }
+            cfgMtime = f.lastModified(); // 自己写的，不用再重读
         } catch (Throwable ignored) {
         }
     }
