@@ -24,11 +24,10 @@ import de.robv.android.xposed.XposedBridge;
 /**
  * 视频时长常显：自己画一个 "00:12 / 03:45"，不用抖音的时间控件。
  *
- * 数据和状态都来自 SimPlayer 公共监听层 OnUIPlayListenerDelegate（40.7.0，主线程）：
- *  - onPlayProgressChange(String 视频id, long 位置ms, long 总时长ms)：更新文字（同一个位置会重复到达）。
- *  - 同一个类里的状态回调（停止 / 释放 / 失败、暂停、首帧渲染）：播放器自己报告状态变化，直接隐藏或显示，不靠猜。
- *    这些回调的具体名字没有追踪过，所以启动时扫描这个类的 on* 方法，按名字归类（见 kindOf）；
- *    扫到的方法名、每个事件前两次触发的参数都会写进 LSPosed 日志（"[DanmakuColor] ev ..."），名字对不上时按日志改。
+ * 数据和状态都来自播放分发器 DIPlayListenerDispatcher（40.7.0，主线程，每个事件只到一次，不像下层包装监听器会重复十几次）：
+ *  - onPlayProgressChange(String 视频id, long 位置ms, long 总时长ms)：更新文字。
+ *  - 状态回调（TextRec 追踪到的真实名字）：onPlayStop / onPlayRelease 隐藏；onPausePlay / onPlayPause 暂停；
+ *    onPlaying / onRenderFirstFrame 新视频开始播放，立刻显示（onPlaying 的 PlayerEvent 里带 duration）。
  *  - 兜底看门狗：只有一条 1 秒的延时消息，1 秒没有进度回调才检查进度条（暂停时还在屏幕上就继续显示）。没有任何周期性轮询。
  *  - 换视频后 1 秒内忽略刚离开的那个视频的进度回调（新旧回调交错会让文字来回跳）。
  *
@@ -38,7 +37,7 @@ final class TimeHook {
     private TimeHook() {}
 
     /** 版本相关（40.7.0）。 */
-    private static final String DELEGATE = "com.ss.android.ugc.aweme.video.simplayer.listener.base.OnUIPlayListenerDelegate";
+    private static final String DELEGATE = "com.ss.android.ugc.aweme.o.oplayer.util.DIPlayListenerDispatcher";
     private static final String PROGRESS = "onPlayProgressChange";
     private static final String SEEKBAR = "com.ss.android.ugc.aweme.o.seekbar.views.seekbar.ProSeekBarView";
 
@@ -104,21 +103,21 @@ final class TimeHook {
         }
     }
 
-    /** 扫描监听层里除进度之外的 on* 方法，全部挂上（不相关的只记前两次日志，之后第一行就返回）。 */
+    /** 分发器里 TextRec 追踪到的状态回调（名字都没混淆），按名字精确挂，所有重载都挂。 */
     private static boolean hookEvents(ClassLoader cl) {
         try {
             Class<?> c = Class.forName(DELEGATE, false, cl);
             StringBuilder names = new StringBuilder();
             int n = 0;
             for (Method m : c.getDeclaredMethods()) {
-                String name = m.getName();
-                if (!name.startsWith("on") || name.equals(PROGRESS) || m.isSynthetic()) continue;
+                int kind = kindOf(m.getName());
+                if (kind == K_OTHER || m.isSynthetic()) continue;
                 int mod = m.getModifiers();
                 if (Modifier.isStatic(mod) || Modifier.isAbstract(mod)) continue;
                 try {
-                    XposedBridge.hookMethod(m, new EventHook(name, kindOf(name)));
+                    XposedBridge.hookMethod(m, new EventHook(m.getName(), kind));
                     n++;
-                    names.append(' ').append(name).append('/').append(m.getParameterTypes().length);
+                    names.append(' ').append(m.getName()).append('/').append(m.getParameterTypes().length);
                 } catch (Throwable ignored) {
                 }
             }
@@ -132,18 +131,21 @@ final class TimeHook {
         }
     }
 
-    /**
-     * 按方法名归类。名字没追踪过，所以用关键字，并排除缓冲 / 加载 / 拖动 / 缓存 / 分辨率这类
-     * 「名字里带 stop / pause 但不是视频本身停了」的回调。
-     */
+    /** 40.7.0 追踪到的真实方法名。onPreparePlay 不用：预加载的下一个视频也会走。 */
     private static int kindOf(String name) {
-        String n = name.toLowerCase(Locale.ROOT);
-        if (n.contains("buffer") || n.contains("load") || n.contains("seek") || n.contains("cache")
-                || n.contains("resolution") || n.contains("speed")) return K_OTHER;
-        if (n.contains("firstframe") || n.contains("renderstart") || n.contains("renderfirst")) return K_FIRST;
-        if (n.contains("stop") || n.contains("release") || n.contains("fail") || n.contains("error")) return K_STOP;
-        if (n.contains("pause")) return K_PAUSE;
-        return K_OTHER;
+        switch (name) {
+            case "onPlayStop":
+            case "onPlayRelease":
+                return K_STOP;
+            case "onPausePlay":
+            case "onPlayPause":
+                return K_PAUSE;
+            case "onPlaying":
+            case "onRenderFirstFrame":
+                return K_FIRST;
+            default:
+                return K_OTHER;
+        }
     }
 
     private static boolean isMain() {
@@ -190,13 +192,14 @@ final class TimeHook {
                 }
                 if (kind == K_OTHER) return;
                 final String id = firstString(p.args);
+                final long dur = kind == K_FIRST ? durationOf(p.args) : -1;
                 if (isMain()) {
-                    onEvent(kind, id);
+                    onEvent(kind, id, dur);
                 } else {
                     MAIN.post(new Runnable() {
                         @Override
                         public void run() {
-                            onEvent(kind, id);
+                            onEvent(kind, id, dur);
                         }
                     });
                 }
@@ -212,6 +215,29 @@ final class TimeHook {
             Object o = p.thisObject;
             if (o instanceof View && seekRef.get() != o) seekRef = new WeakReference<>((View) o);
         }
+    }
+
+    /** 参数里的 PlayerEvent（toString 里有 duration=…）读出总时长 ms；读不到返回 -1。 */
+    private static long durationOf(Object[] a) {
+        if (a == null) return -1;
+        for (Object o : a) {
+            if (o == null || o instanceof String || o instanceof Number || o instanceof Boolean) continue;
+            try {
+                java.lang.reflect.Field f = null;
+                for (Class<?> k = o.getClass(); k != null && f == null && k != Object.class; k = k.getSuperclass()) {
+                    try {
+                        f = k.getDeclaredField("duration");
+                    } catch (NoSuchFieldException ignored) {
+                    }
+                }
+                if (f == null) continue;
+                f.setAccessible(true);
+                Object v = f.get(o);
+                if (v instanceof Number && ((Number) v).longValue() > 0) return ((Number) v).longValue();
+            } catch (Throwable ignored) {
+            }
+        }
+        return -1;
     }
 
     private static String firstString(Object[] a) {
@@ -235,7 +261,7 @@ final class TimeHook {
 
     // ------------------------------------------------------------ 状态事件
 
-    private static void onEvent(int kind, String id) {
+    private static void onEvent(int kind, String id, long dur) {
         if (!enabled()) return;
         boolean mine = id == null || id.equals(lastId); // 别的视频播放器的事件（比如旧视频迟到的 stop）不动当前文字
         switch (kind) {
@@ -250,8 +276,11 @@ final class TimeHook {
                     MAIN.postDelayed(PAUSE_CHECK, PAUSE_CHECK_MS);
                 }
                 break;
-            case K_FIRST: // 新视频首帧出来了：马上画出来，不等第一个进度回调
-                if (switchTo(id) || !shown) show(CommentHook.top.get(), PLACEHOLDER);
+            case K_FIRST: // 新视频开始播放：马上画出来（onPlaying 里带总时长就直接用），不等第一个进度回调
+                if (switchTo(id) || !shown) {
+                    String tail = dur > 0 ? fmt(dur / 1000) : "--:--";
+                    show(CommentHook.top.get(), "00:00 / " + tail);
+                }
                 break;
             default:
                 break;
