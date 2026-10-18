@@ -11,11 +11,8 @@ import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.text.InputType;
 import android.view.Gravity;
-import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
@@ -39,7 +36,6 @@ public class MainActivity extends Activity {
     private LinearLayout segMode, segKey, statusCard;
     private TextView tvOffset;
     private int tX, tY;
-    private final Handler ui = new Handler(Looper.getMainLooper());
     private TextView tvStatus, btnPush, btnAdjust;
     private ScrollView scroll;
 
@@ -237,12 +233,6 @@ public class MainActivity extends Activity {
                 showStatus(sb.toString(), sb.indexOf("✗") >= 0 ? 2 : 1);
             });
         }).start();
-    }
-
-    @Override
-    protected void onDestroy() {
-        ui.removeCallbacksAndMessages(null);
-        super.onDestroy();
     }
 
     // ------------------------------------------------------------ 位置浮窗
