@@ -3,744 +3,302 @@ package com.danmaku.randcolor;
 import android.app.Activity;
 import android.graphics.Rect;
 import android.graphics.Typeface;
-import android.graphics.drawable.Drawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.ViewParent;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.util.ArrayList;
-import java.util.IdentityHashMap;
-import java.util.WeakHashMap;
-import java.util.regex.Pattern;
+import java.util.Set;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 
 /**
- * 视频时长常显（形如 00:12 / 03:45，沿用抖音自己拖动进度条时显示的那段文字）。
+ * 视频时长常显：自己画一个 "00:12 / 03:45"，不再借用抖音的时间控件。
  *
- * 依据 TextRec 的记录（40.7.0）：ProTimeDescViewComponent 里有两个观察者
- *   $onCreate$1#onChanged：播放时每帧调用，更新时间文字；
- *   $onCreate$2#onChanged(Boolean)：只在拖动开始(true) / 松手(false) 时调用，是显示开关。
+ * 依据 TextRec 的追踪（40.7.0）：
+ *  - PMPlayListenerDispatcherV2#onPlayProgressChange：播放时每次进度更新都在主线程调用（名字没混淆）。
+ *    它的调用链里会调用 TTVideoEngine#getDuration()，所以在它执行期间被调用的那个 TTVideoEngine 就是当前正在播的。
+ *  - TTVideoEngine#getCurrentPlaybackTime() / getDuration()：公开方法，返回毫秒。
  *
- * 做法（都不需要轮询，全部由抖音自己的回调驱动）：
- *  1) $onCreate$2：把参数一律改成 true —— 松手时的 false 变成 true，时长就不会再被收起。
- *  2) $onCreate$1：借它每帧的回调，找到这个组件持有的时间 View（只在刚出现时找，找到后每 16 次才复查一次），
- *     把它强制设为可见，并按设置里的偏移量做 translation（相对抖音原位置，单位 dp）。
- *
- * 关闭开关后：下一次回调里把偏移和可见性还原。
+ * 做法（没有轮询，全部由抖音自己的回调驱动）：
+ *  1) 进度回调执行前后各打一个标记；标记期间 TTVideoEngine#getDuration / getCurrentPlaybackTime 被调用，就记住这个引擎。
+ *  2) 进度回调结束后，用记住的引擎读当前位置和总时长，格式化成 mm:ss，只在秒数变化时才 setText。
+ *  3) 文字是一个独立的 TextView，加在当前 Activity 的最上层，默认在屏幕正中，按设置里的偏移（dp）移动，不拦截触摸。
+ *  4) 可见性：进度条（ProSeekBarView#setProgress 的 this）还在屏幕上就保持显示（暂停时也不消失），
+ *     离开视频页（进度条不可见 / 脱离窗口）后隐藏。没抓到进度条时，3 秒没有进度回调就隐藏。
  */
 final class TimeHook {
     private TimeHook() {}
 
-    /** 版本相关（40.7.0）：时间组件的两个观察者。换版本后需要重新记录。 */
-    private static final String COMP = "com.ss.android.ugc.aweme.o.seekbar.core.components.timedesc.ProTimeDescViewComponent";
-    private static final String OBS_FRAME = COMP + "$onCreate$1";
-    private static final String OBS_SHOW = COMP + "$onCreate$2";
+    /** 版本相关（40.7.0）。 */
+    private static final String PM = "com.ss.android.ugc.aweme.feed.controller.refactor.impl_pm.PMPlayListenerDispatcherV2";
+    private static final String PM_METHOD = "onPlayProgressChange";
+    private static final String ENGINE = "com.ss.ttvideoengine.TTVideoEngine";
+    private static final String SEEKBAR = "com.ss.android.ugc.aweme.o.seekbar.views.seekbar.ProSeekBarView";
 
-    /**
-     * 第 4 层（版本相关，40.7.0）：进度条各组件的公共父类 X.0qVI，里面的 LJJJJZ() 是「按需加载」入口——
-     * 拖动开始(true)时由各组件的观察者调用，先取 ViewStub，没加载好就异步加载并返回 false。
-     * X.0qVF 是其中的时间组件。不拖动时没人调它，所以时间 View 平时根本不存在。
-     */
-    private static final String BASE = "X.0qVI";
-    private static final String IMPL = "X.0qVF";
-    private static final String LOADER = "LJJJJZ";
-
-    private static final Pattern TIME = Pattern.compile("\\d{1,3}:\\d{2}");
-
-    private static volatile boolean frameHooked, showHooked, loadHooked, anyApplied, loggedOk;
-    private static volatile Method loader;
-    private static volatile boolean selfCalling;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+
+    private static volatile boolean progressHooked, engineHooked, seekHooked;
     private static int misses;
 
-    // 诊断浮层用：最近一次找到的时间 View、状态说明
-    private static volatile String lastNote = "还没收到时间回调（没播放视频？）";
-    private static WeakReference<View> lastTv, lastTop;
-    private static WeakReference<TextView> dbgView;
-    private static int dbgTick;
+    /** 只在主线程读写。 */
+    private static boolean inProgress;
+    private static WeakReference<Object> engineRef = new WeakReference<>(null);
+    private static WeakReference<View> seekRef = new WeakReference<>(null);
+    private static Class<?> mCls;
+    private static Method mPos, mDur;
+    private static boolean loggedOk;
 
-    /** 每个时间组件实例一份状态（每个视频页一个组件），弱引用，页面回收后自动消失。 */
-    private static final WeakHashMap<Object, State> STATES = new WeakHashMap<>();
-
-    private static final class State {
-        WeakReference<View> tv, top;
-        DanmakuConfig cfgRef;
-        int tick, attempts;
-        int origTv = -1, origTop = -1;
-        boolean failed, applied, unclipped, dbgBg;
-        Drawable origBg;
-        /** 往上多放开的那几层祖先（加载出来的 LinearLayout 之类）和它们原来的可见性，关开关时还原。 */
-        final ArrayList<WeakReference<View>> ancV = new ArrayList<>();
-        final ArrayList<Integer> ancO = new ArrayList<>();
-    }
+    private static WeakReference<TextView> viewRef = new WeakReference<>(null);
+    private static String lastText = "";
+    private static int lastDx = Integer.MIN_VALUE, lastDy = Integer.MIN_VALUE;
+    private static long lastTickAt;
+    private static final Rect TMP = new Rect();
 
     // ------------------------------------------------------------ 安装
 
-    /** 目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到两个观察者都挂上。 */
+    /** 目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到都挂上。 */
     static void tryHook(ClassLoader cl) {
-        if (cl == null || (frameHooked && showHooked && loadHooked)) return;
+        if (cl == null || (progressHooked && engineHooked && seekHooked)) return;
         attempt(cl);
-        if (!(frameHooked && showHooked && loadHooked)) {
+        if (!(progressHooked && engineHooked)) {
             ClassLoader ctx = Thread.currentThread().getContextClassLoader();
             if (ctx != null && ctx != cl) attempt(ctx);
         }
-        if (!(frameHooked && showHooked && loadHooked) && ++misses == 6) {
-            XposedBridge.log("[DanmakuColor] time hook: classes not found yet (frame=" + frameHooked
-                    + ", show=" + showHooked + ", load=" + loadHooked + ")");
+        if (!(progressHooked && engineHooked) && ++misses == 6) {
+            XposedBridge.log("[DanmakuColor] time hook: classes not found yet (progress=" + progressHooked
+                    + ", engine=" + engineHooked + ")");
         }
     }
 
     private static void attempt(ClassLoader cl) {
-        if (!showHooked) showHooked = hookObserver(cl, OBS_SHOW, new ShowHook());
-        if (!frameHooked) frameHooked = hookObserver(cl, OBS_FRAME, new FrameHook());
-        if (!loadHooked) loadHooked = hookLoader(cl);
+        if (!progressHooked) progressHooked = hookAll(cl, PM, PM_METHOD, new ProgressHook());
+        if (!engineHooked) {
+            CaptureHook cap = new CaptureHook();
+            boolean a = hookAll(cl, ENGINE, "getDuration", cap);
+            boolean b = hookAll(cl, ENGINE, "getCurrentPlaybackTime", cap);
+            engineHooked = a || b;
+        }
+        if (!seekHooked) seekHooked = hookAll(cl, SEEKBAR, "setProgress", new SeekHook());
     }
 
-    // ------------------------------------------------------------ 第 4 层：加载入口 X.0qVI#LJJJJZ()
-
-    private static boolean hookLoader(ClassLoader cl) {
+    private static boolean hookAll(ClassLoader cl, String cls, String method, XC_MethodHook cb) {
         try {
-            Class<?> base = Class.forName(BASE, false, cl);
-            Method found = null;
-            for (Method m : base.getDeclaredMethods()) {
-                if (m.getName().equals(LOADER) && m.getParameterTypes().length == 0 && m.getReturnType() == boolean.class) {
-                    found = m;
-                    break;
-                }
+            Class<?> c = Class.forName(cls, false, cl);
+            Set<XC_MethodHook.Unhook> s = XposedBridge.hookAllMethods(c, method, cb);
+            if (s == null || s.isEmpty()) {
+                XposedBridge.log("[DanmakuColor] time hook: no method " + cls + "#" + method);
+                return false;
             }
-            if (found == null) {
-                XposedBridge.log("[DanmakuColor] time loader " + BASE + "#" + LOADER + "() not found");
-                return true; // 签名变了：别反复重试
-            }
-            found.setAccessible(true);
-            loader = found;
-            XposedBridge.hookMethod(found, new LoadHook());
-            XposedBridge.hookAllConstructors(base, new CtorHook());
             return true;
         } catch (ClassNotFoundException e) {
             return false; // 还没加载：下次回到前台再试
         } catch (Throwable t) {
-            XposedBridge.log("[DanmakuColor] time loader hook failed: " + t);
-            return true;
+            XposedBridge.log("[DanmakuColor] time hook failed: " + cls + "#" + method + " " + t);
+            return false;
         }
     }
 
-    private static boolean isTimeComp(Object o) {
-        return o != null && o.getClass().getName().equals(IMPL);
+    private static boolean isMain() {
+        return Looper.myLooper() == Looper.getMainLooper();
     }
 
-    /** 时间组件一创建（首帧 / 换视频），就替用户完成「第一次拖动」那一步：自己调一次加载入口。 */
-    private static final class CtorHook extends XC_MethodHook {
+    // ------------------------------------------------------------ 钩子
+
+    /** 进度回调：前面打标记，后面读时间并更新显示。 */
+    private static final class ProgressHook extends XC_MethodHook {
+        @Override
+        protected void beforeHookedMethod(MethodHookParam p) {
+            if (isMain()) inProgress = true;
+        }
+
         @Override
         protected void afterHookedMethod(MethodHookParam p) {
+            if (!isMain()) return;
+            inProgress = false;
             try {
-                if (!DanmakuHook.cfg.timeAlways || !isTimeComp(p.thisObject)) return;
-                MAIN.postDelayed(new Boot(p.thisObject, 0), 800); // 等构造和 onCreate 走完再调
+                tick();
             } catch (Throwable ignored) {
             }
         }
     }
 
-    /** 抖音自己（用户拖动）调了加载入口：加载完同样要把时间 View 找出来套用。我们自己调的那次不重复处理。 */
-    private static final class LoadHook extends XC_MethodHook {
+    /** 进度回调执行期间，TTVideoEngine 的这两个读数方法被谁调用，谁就是当前引擎。 */
+    private static final class CaptureHook extends XC_MethodHook {
         @Override
         protected void afterHookedMethod(MethodHookParam p) {
-            try {
-                if (selfCalling || !DanmakuHook.cfg.timeAlways || !isTimeComp(p.thisObject)) return;
-                MAIN.postDelayed(new Boot(p.thisObject, 1), 400);
-            } catch (Throwable ignored) {
-            }
+            if (!inProgress || !isMain()) return;
+            Object o = p.thisObject;
+            if (o != null && engineRef.get() != o) engineRef = new WeakReference<>(o);
         }
     }
 
-    /** 0 调加载入口 → 1/2 找 View 并套用 → 3 再调一次加载入口 → 4/5 再找。找到就停，最多约 5 秒，没有常驻定时器。 */
-    private static final class Boot implements Runnable {
-        private static final int[] NEXT = {400, 800, 1500, 600, 1500};
-        private final Object o;
-        private int stage;
-
-        Boot(Object o, int stage) {
-            this.o = o;
-            this.stage = stage;
+    /** 进度条自己（每次进度动画都会调 setProgress）：只记下这个 View，用来判断是不是还在视频页。 */
+    private static final class SeekHook extends XC_MethodHook {
+        @Override
+        protected void afterHookedMethod(MethodHookParam p) {
+            Object o = p.thisObject;
+            if (o instanceof View && seekRef.get() != o) seekRef = new WeakReference<>((View) o);
         }
+    }
 
+    // ------------------------------------------------------------ 读时间 + 显示
+
+    private static void tick() throws Throwable {
+        if (!DanmakuHook.cfg.timeAlways) {
+            removeView();
+            return;
+        }
+        Object e = engineRef.get();
+        if (e == null) return;
+        if (mCls != e.getClass()) {
+            mCls = e.getClass();
+            mPos = mDur = null;
+            try {
+                mPos = mCls.getMethod("getCurrentPlaybackTime");
+                mDur = mCls.getMethod("getDuration");
+            } catch (Throwable t) {
+                XposedBridge.log("[DanmakuColor] time: engine methods missing " + t);
+                return;
+            }
+        }
+        if (mPos == null || mDur == null) return;
+        long pos = num(mPos.invoke(e, (Object[]) null));
+        long dur = num(mDur.invoke(e, (Object[]) null));
+        if (!loggedOk) {
+            loggedOk = true;
+            XposedBridge.log("[DanmakuColor] time ok: pos=" + pos + "ms dur=" + dur + "ms");
+        }
+        if (pos < 0) pos = 0;
+        if (dur > 0 && pos > dur) pos = dur;
+        show(fmt(pos) + " / " + (dur > 0 ? fmt(dur) : "--:--"));
+    }
+
+    private static long num(Object o) {
+        return o instanceof Number ? ((Number) o).longValue() : -1;
+    }
+
+    private static String fmt(long ms) {
+        long s = ms / 1000;
+        long h = s / 3600, m = (s / 60) % 60, sec = s % 60;
+        StringBuilder b = new StringBuilder(8);
+        if (h > 0) b.append(h).append(':');
+        if (m < 10) b.append('0');
+        b.append(m).append(':');
+        if (sec < 10) b.append('0');
+        b.append(sec);
+        return b.toString();
+    }
+
+    private static boolean isHostActivity(Activity a) {
+        return a != null && !a.isFinishing() && a.getClass().getName().contains("MainActivity");
+    }
+
+    private static void show(String text) {
+        Activity a = CommentHook.top.get();
+        if (!isHostActivity(a)) return;
+        TextView t = viewRef.get();
+        ViewGroup decor = (ViewGroup) a.getWindow().getDecorView();
+        float d = a.getResources().getDisplayMetrics().density;
+        if (t != null && t.getContext() != a) { // 换了 Activity：旧的拿掉重建
+            detach(t);
+            t = null;
+        }
+        if (t == null) {
+            t = new TextView(a);
+            t.setTextSize(20f);
+            t.setTypeface(Typeface.DEFAULT_BOLD);
+            t.setTextColor(0xFFFFFFFF);
+            t.setShadowLayer(5f * d, 0f, 0f, 0xFF000000); // 黑色描边感，亮暗背景都看得清
+            t.setIncludeFontPadding(false);
+            t.setClickable(false);
+            t.setFocusable(false);
+            try {
+                t.setFontFeatureSettings("tnum"); // 等宽数字，秒数跳动时不抖
+            } catch (Throwable ignored) {
+            }
+            t.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            viewRef = new WeakReference<>(t);
+            lastText = "";
+            lastDx = lastDy = Integer.MIN_VALUE;
+        }
+        if (t.getParent() != decor) {
+            detach(t);
+            decor.addView(t, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        } else if (decor.indexOfChild(t) != decor.getChildCount() - 1) {
+            t.bringToFront();
+        }
+        applyOffset(t, d);
+        if (!text.equals(lastText)) {
+            lastText = text;
+            t.setText(text);
+        }
+        if (t.getVisibility() != View.VISIBLE) t.setVisibility(View.VISIBLE);
+        lastTickAt = System.currentTimeMillis();
+        MAIN.removeCallbacks(CHECK);
+        MAIN.postDelayed(CHECK, 1000);
+    }
+
+    private static void applyOffset(TextView t, float d) {
+        DanmakuConfig c = DanmakuHook.cfg;
+        if (c.timeDx == lastDx && c.timeDy == lastDy) return;
+        lastDx = c.timeDx;
+        lastDy = c.timeDy;
+        t.setTranslationX(c.timeDx * d);
+        t.setTranslationY(c.timeDy * d);
+    }
+
+    /** 每秒检查一次：进度条还在屏幕上就继续显示，否则隐藏。只在显示期间运行，隐藏后不再排队。 */
+    private static final Runnable CHECK = new Runnable() {
         @Override
         public void run() {
             try {
-                if (!DanmakuHook.cfg.timeAlways) return;
-                if (stage == 0 || stage == 3) {
-                    callLoader(o);
-                } else if (applyOnce(o)) {
-                    return;
-                } else if (stage >= 5) {
-                    lastNote = "加载入口调过了，但没找到时间 View";
-                    XposedBridge.log("[DanmakuColor] time view not found after load, comp=" + o.getClass().getName());
-                    return;
+                TextView t = viewRef.get();
+                if (t == null || t.getVisibility() != View.VISIBLE) return;
+                View sb = seekRef.get();
+                boolean alive;
+                if (sb != null) {
+                    alive = sb.isAttachedToWindow() && sb.isShown() && sb.getGlobalVisibleRect(TMP);
+                } else {
+                    alive = System.currentTimeMillis() - lastTickAt < 3000; // 没抓到进度条：看有没有进度回调
                 }
-                if (stage < NEXT.length) MAIN.postDelayed(this, NEXT[stage]);
-                stage++;
+                if (alive && DanmakuHook.cfg.timeAlways) {
+                    MAIN.postDelayed(this, 1000);
+                } else {
+                    t.setVisibility(View.GONE);
+                }
             } catch (Throwable ignored) {
             }
         }
+    };
+
+    private static void detach(View v) {
+        if (v != null && v.getParent() instanceof ViewGroup) ((ViewGroup) v.getParent()).removeView(v);
     }
 
-    private static void callLoader(Object o) {
-        Method m = loader;
-        if (m == null) return;
-        selfCalling = true;
-        try {
-            m.invoke(o);
-        } catch (Throwable t) {
-            lastNote = "调加载入口失败: " + t;
-        } finally {
-            selfCalling = false;
-        }
+    private static void removeView() {
+        MAIN.removeCallbacks(CHECK);
+        detach(viewRef.get());
     }
 
-    /** 从时间组件自己出发找时间 View（加载完它的字段里就有了），找到就套用。 */
-    private static boolean applyOnce(Object o) {
-        DanmakuConfig c = DanmakuHook.cfg;
-        State s;
-        synchronized (STATES) {
-            s = STATES.get(o);
-            if (s == null) {
-                s = new State();
-                STATES.put(o, s);
-            }
-        }
-        View[] f = locate(o, 99);
-        if (f == null) return false;
-        s.tv = new WeakReference<>(f[0]);
-        s.top = new WeakReference<>(f[1]);
-        lastTv = s.tv;
-        lastTop = s.top;
-        lastNote = "加载入口调用后找到并套用";
-        apply(s, f[0], f[1], c);
-        s.cfgRef = c;
-        return true;
-    }
-
-    private static boolean hookObserver(ClassLoader cl, String name, XC_MethodHook cb) {
-        try {
-            Class<?> k = Class.forName(name, false, cl);
-            int n = 0;
-            for (Method m : k.getDeclaredMethods()) {
-                if (!m.getName().equals("onChanged")) continue; // 桥接方法和具体方法都挂
-                XposedBridge.hookMethod(m, cb);
-                n++;
-            }
-            return n > 0;
-        } catch (ClassNotFoundException e) {
-            return false; // 还没加载：下次回到前台再试
-        } catch (Throwable t) {
-            XposedBridge.log("[DanmakuColor] time hook failed: " + name + " " + t);
-            return true; // 别反复重试
-        }
-    }
-
-    // ------------------------------------------------------------ 显示开关：一律 true
-
-    private static final class ShowHook extends XC_MethodHook {
-        @Override
-        protected void beforeHookedMethod(MethodHookParam p) {
-            try {
-                if (!DanmakuHook.cfg.timeAlways) return;
-                Object[] a = p.args;
-                if (a != null && a.length == 1 && a[0] instanceof Boolean) a[0] = Boolean.TRUE;
-            } catch (Throwable ignored) {
-            }
-        }
-    }
-
-    // ------------------------------------------------------------ 每帧回调：找到时间 View，保持可见 + 偏移
-
-    private static final class FrameHook extends XC_MethodHook {
-        @Override
-        protected void afterHookedMethod(MethodHookParam p) {
-            try {
-                DanmakuConfig c = DanmakuHook.cfg;
-                if (c.timeDebug && (++dbgTick & 15) == 1) debugShow(CommentHook.top.get());
-                if (!c.timeAlways) {
-                    lastNote = "开关没开（设置页「视频时长一直显示」）";
-                    if (anyApplied) restoreAll();
-                    return;
-                }
-                if (Looper.myLooper() != Looper.getMainLooper()) return;
-                Object self = p.thisObject;
-                if (self == null) return;
-                Object key = outerOf(self);
-                if (key == null) key = self;
-
-                State s;
-                synchronized (STATES) {
-                    s = STATES.get(key);
-                    if (s == null) {
-                        s = new State();
-                        STATES.put(key, s);
-                    }
-                }
-                if (s.failed) return;
-                s.tick++;
-                if (s.tv == null) lastNote = "收到回调，正在找时间 View（第 " + s.attempts + " 次）";
-
-                View tv = s.tv == null ? null : s.tv.get();
-                View top = s.top == null ? null : s.top.get();
-                if (tv != null && top != null) {
-                    // 已找到：配置没变就每 16 次回调才复查一次可见性
-                    if (s.cfgRef == c && (s.tick & 15) != 0) return;
-                    lastTv = s.tv;
-                    lastTop = s.top;
-                    lastNote = "已找到并套用";
-                    apply(s, tv, top, c);
-                    s.cfgRef = c;
-                    return;
-                }
-
-                // 还没找到：前几次回调每次都试，之后每 16 次试一次，最多 8 次
-                if (!(s.tick <= 6 || (s.tick & 15) == 0)) return;
-                s.attempts++;
-                View[] f = locate(self, s.tick);
-                if (f == null) {
-                    lastNote = "没找到时间 View（已试 " + s.attempts + " 次）";
-                    if (s.attempts >= 8) {
-                        s.failed = true;
-                        lastNote = "放弃：组件里没找到时间 View";
-                        XposedBridge.log("[DanmakuColor] time view not found, observer=" + self.getClass().getName());
-                    }
-                    return;
-                }
-                s.tv = new WeakReference<>(f[0]);
-                s.top = new WeakReference<>(f[1]);
-                lastTv = s.tv;
-                lastTop = s.top;
-                lastNote = "已找到并套用";
-                if (!loggedOk) {
-                    loggedOk = true;
-                    CharSequence t = f[0] instanceof TextView ? ((TextView) f[0]).getText() : null;
-                    XposedBridge.log("[DanmakuColor] time view ok: " + f[0].getClass().getName()
-                            + " text=\"" + t + "\" top=" + f[1].getClass().getName()
-                            + " | " + describe(f[0]) + " | top: " + describe(f[1]));
-                }
-                apply(s, f[0], f[1], c);
-                s.cfgRef = c;
-            } catch (Throwable ignored) {
-            }
-        }
-    }
-
-    // ------------------------------------------------------------ 应用 / 还原
-
-    private static void apply(State s, View tv, View top, DanmakuConfig c) {
-        // 早期（布局还是 0x0）找到时 top 会退化成文字本身；现在布局出来了就换成外层小容器，
-        // 并把文字自己身上的偏移清掉——否则文字和容器各移一次，文字被容器裁掉一半
-        if (top == tv && tv instanceof TextView) {
-            View better = climb((TextView) tv);
-            if (better != tv) {
-                top = better;
-                s.top = new WeakReference<>(better);
-                lastTop = s.top;
-                s.origTop = -1;
-            }
-        }
-        if (tv != top) {
-            if (tv.getTranslationX() != 0f) tv.setTranslationX(0f);
-            if (tv.getTranslationY() != 0f) tv.setTranslationY(0f);
-        }
-        float d = tv.getResources().getDisplayMetrics().density;
-        float tx = c.timeDx * d, ty = c.timeDy * d;
-        if (s.origTv < 0) s.origTv = tv.getVisibility();
-        if (s.origTop < 0) s.origTop = top.getVisibility();
-
-        // 从文字一路到 top 都要可见（只动这一段，不碰上面更高层的容器：清屏 / 评论面板打开时它们本来就该隐藏）
-        View v = tv;
-        while (true) {
-            if (v.getVisibility() != View.VISIBLE) v.setVisibility(View.VISIBLE);
-            if (v.getAlpha() < 1f) v.setAlpha(1f);
-            if (v == top) break;
-            ViewParent pp = v.getParent();
-            if (!(pp instanceof View)) break;
-            v = (View) pp;
-        }
-        // 文字外面加载出来的那层容器（诊断里常见 LinearLayout GONE 0x0）本身是隐藏的：往上最多再放开 3 层，
-        // 碰到已经可见且有尺寸的祖先就停，不会去动页面级的大容器
-        View up = top;
-        for (int i = 0; i < 3; i++) {
-            ViewParent pp = up.getParent();
-            if (!(pp instanceof View)) break;
-            View a = (View) pp;
-            if (a.getVisibility() == View.VISIBLE && a.getAlpha() >= 1f && a.getWidth() > 0) break;
-            boolean known = false;
-            for (WeakReference<View> r : s.ancV) {
-                if (r.get() == a) {
-                    known = true;
-                    break;
-                }
-            }
-            if (!known) {
-                s.ancV.add(new WeakReference<>(a));
-                s.ancO.add(a.getVisibility());
-            }
-            if (a.getVisibility() != View.VISIBLE) a.setVisibility(View.VISIBLE);
-            if (a.getAlpha() < 1f) a.setAlpha(1f);
-            up = a;
-        }
-        whiten(top, new int[]{40}); // 时间文字（含「/ 总时长」）统一白色
-        if (top.getTranslationX() != tx) top.setTranslationX(tx);
-        if (top.getTranslationY() != ty) top.setTranslationY(ty);
-        if (!s.unclipped && (c.timeDx != 0 || c.timeDy != 0)) {
-            s.unclipped = true;
-            unclip(top);
-        }
-        // 诊断：给它涂半透明红底，文字是空的 / 透明时也能看见这块区域
-        if (c.timeDebug && !s.dbgBg) {
-            s.dbgBg = true;
-            s.origBg = top.getBackground();
-            top.setBackgroundColor(0x66FF0000);
-        } else if (!c.timeDebug && s.dbgBg) {
-            s.dbgBg = false;
-            top.setBackground(s.origBg);
-            s.origBg = null;
-        }
-        s.applied = true;
-        anyApplied = true;
-    }
-
-    private static void whiten(View v, int[] budget) {
-        if (budget[0]-- <= 0) return;
-        if (v instanceof TextView) {
-            TextView t = (TextView) v;
-            if (t.getCurrentTextColor() != 0xFFFFFFFF) t.setTextColor(0xFFFFFFFF);
-        } else if (v instanceof ViewGroup) {
-            ViewGroup g = (ViewGroup) v;
-            for (int i = 0; i < g.getChildCount(); i++) whiten(g.getChildAt(i), budget);
-        }
-    }
-
-    /** 关掉开关后还原：偏移归零，可见性回到我们第一次碰它之前的状态。 */
-    private static void restoreAll() {
-        anyApplied = false;
-        synchronized (STATES) {
-            for (State s : STATES.values()) {
-                if (!s.applied) continue;
-                s.applied = false;
-                s.cfgRef = null;
-                View tv = s.tv == null ? null : s.tv.get();
-                View top = s.top == null ? null : s.top.get();
-                if (top != null) {
-                    if (s.dbgBg) {
-                        s.dbgBg = false;
-                        top.setBackground(s.origBg);
-                        s.origBg = null;
-                    }
-                    top.setTranslationX(0f);
-                    top.setTranslationY(0f);
-                    if (s.origTop > 0) top.setVisibility(s.origTop);
-                }
-                if (tv != null && tv != top && s.origTv > 0) tv.setVisibility(s.origTv);
-                for (int i = s.ancV.size() - 1; i >= 0; i--) {
-                    View a = s.ancV.get(i).get();
-                    if (a != null && s.ancO.get(i) > 0) a.setVisibility(s.ancO.get(i));
-                }
-                s.ancV.clear();
-                s.ancO.clear();
-            }
-        }
-    }
-
-    /** 偏移后的 View 可能超出父容器：把比较小的祖先的裁剪关掉（碰到铺满屏幕的祖先就停，它本来就不会裁掉屏幕内的内容）。 */
-    private static void unclip(View top) {
-        View root = top.getRootView();
-        int w = root.getWidth(), h = root.getHeight();
-        ViewParent pp = top.getParent();
-        for (int i = 0; i < 8 && pp instanceof ViewGroup; i++) {
-            ViewGroup g = (ViewGroup) pp;
-            if (w > 0 && g.getWidth() >= w * 0.9f && g.getHeight() >= h * 0.8f) break;
-            g.setClipChildren(false);
-            g.setClipToPadding(false);
-            pp = g.getParent();
-        }
-    }
-
-    // ------------------------------------------------------------ 诊断浮层
-
-    /** 回到前台时刷新（也负责在关掉诊断后把浮层拿掉）。 */
+    /** 回到前台（配置刚重读过）：换了页面就拿掉；位置有变就立即生效。 */
     static void onResume(Activity a) {
-        debugShow(a);
-    }
-
-    /** 在当前 Activity 的最上层放一小块文字：它是独立的 TextView，不依赖抖音的时间 View 显不显示。 */
-    static void debugShow(Activity a) {
         try {
             if (Looper.myLooper() != Looper.getMainLooper()) return;
-            TextView t = dbgView == null ? null : dbgView.get();
-            if (!DanmakuHook.cfg.timeDebug || a == null) {
-                if (t != null && t.getParent() instanceof ViewGroup) ((ViewGroup) t.getParent()).removeView(t);
+            TextView t = viewRef.get();
+            if (t == null) return;
+            if (!DanmakuHook.cfg.timeAlways || !isHostActivity(a) || t.getContext() != a) {
+                removeView();
                 return;
             }
-            if (t != null && t.getContext() != a) { // 换了 Activity：旧的拿掉重建
-                if (t.getParent() instanceof ViewGroup) ((ViewGroup) t.getParent()).removeView(t);
-                t = null;
-            }
-            ViewGroup decor = (ViewGroup) a.getWindow().getDecorView();
-            float d = a.getResources().getDisplayMetrics().density;
-            if (t == null) {
-                t = new TextView(a);
-                t.setTextSize(10f);
-                t.setTypeface(Typeface.MONOSPACE);
-                t.setTextColor(0xFF66FF99);
-                t.setBackgroundColor(0xCC000000);
-                int pad = (int) (6 * d);
-                t.setPadding(pad, pad, pad, pad);
-                dbgView = new WeakReference<>(t);
-            }
-            if (t.getParent() != decor) {
-                if (t.getParent() instanceof ViewGroup) ((ViewGroup) t.getParent()).removeView(t);
-                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
-                lp.topMargin = (int) (90 * d);
-                decor.addView(t, lp);
-            } else if (decor.indexOfChild(t) != decor.getChildCount() - 1) {
-                t.bringToFront();
-            }
-            t.setText(buildInfo(decor));
+            applyOffset(t, a.getResources().getDisplayMetrics().density);
         } catch (Throwable ignored) {
         }
-    }
-
-    private static String buildInfo(View decor) {
-        StringBuilder sb = new StringBuilder("[时长诊断]\n");
-        sb.append("钩子 frame=").append(frameHooked).append(" show=").append(showHooked).append(" load=").append(loadHooked).append('\n');
-        sb.append("状态 ").append(lastNote).append('\n');
-        sb.append("屏幕 ").append(decor.getWidth()).append('x').append(decor.getHeight()).append('\n');
-        View tv = lastTv == null ? null : lastTv.get();
-        View top = lastTop == null ? null : lastTop.get();
-        if (tv == null || top == null) return sb.append("还没有时间 View").toString();
-        sb.append("文字 ").append(describe(tv));
-        if (tv instanceof TextView) sb.append("\n  内容 \"").append(((TextView) tv).getText()).append('"');
-        if (top != tv) sb.append("\n外层 ").append(describe(top));
-        sb.append("\n偏移 ").append((int) top.getTranslationX()).append(',').append((int) top.getTranslationY()).append("px");
-        sb.append(hiddenAncestor(top));
-        return sb.toString();
-    }
-
-    private static String describe(View v) {
-        int[] l = new int[2];
-        v.getLocationOnScreen(l);
-        boolean on = v.getGlobalVisibleRect(new Rect());
-        String n = v.getClass().getName();
-        n = n.substring(n.lastIndexOf('.') + 1);
-        return n + " " + v.getWidth() + "x" + v.getHeight() + " @" + l[0] + "," + l[1]
-                + " " + visName(v.getVisibility()) + " a=" + v.getAlpha() + " shown=" + v.isShown() + " 屏内=" + on;
-    }
-
-    private static String visName(int vis) {
-        return vis == View.VISIBLE ? "VISIBLE" : vis == View.INVISIBLE ? "INVISIBLE" : "GONE";
-    }
-
-    /** 从这个 View 往上，找第一个不可见 / 全透明 / 尺寸为 0 的祖先：「看不到」多半卡在这里。 */
-    private static String hiddenAncestor(View v) {
-        View cur = v;
-        for (int i = 0; i < 14 && cur != null; i++) {
-            if (cur.getVisibility() != View.VISIBLE || cur.getAlpha() == 0f
-                    || (cur.getWidth() == 0 && cur.getHeight() == 0 && cur.isLaidOut())) {
-                String n = cur.getClass().getName();
-                n = n.substring(n.lastIndexOf('.') + 1);
-                return "\n卡住: 往上第 " + i + " 层 " + n + " " + visName(cur.getVisibility())
-                        + " a=" + cur.getAlpha() + " " + cur.getWidth() + "x" + cur.getHeight();
-            }
-            ViewParent pp = cur.getParent();
-            cur = pp instanceof View ? (View) pp : null;
-        }
-        return "\n往上 14 层都可见";
-    }
-
-    // ------------------------------------------------------------ 找时间 View
-
-    private static Field outerF;
-    private static boolean outerInit;
-
-    /** 观察者（Kotlin 匿名类）持有外层组件的那个字段，通常叫 this$0；按类型找，不依赖名字。 */
-    private static Object outerOf(Object self) {
-        try {
-            if (!outerInit) {
-                outerInit = true;
-                Class<?> k = self.getClass();
-                String outer = k.getName();
-                int i = outer.indexOf('$');
-                if (i > 0) outer = outer.substring(0, i);
-                for (Field f : k.getDeclaredFields()) {
-                    if (f.getType().getName().equals(outer)) {
-                        f.setAccessible(true);
-                        outerF = f;
-                        break;
-                    }
-                }
-            }
-            return outerF == null ? null : outerF.get(self);
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
-    /**
-     * 从观察者出发，沿字段往下最多 3 层（只进抖音自己的类，遇到 kotlin 的 Lazy 就取它的值），收集这个组件持有的 View，
-     * 再挑出显示 "分:秒" 的那个 TextView。返回 {文字所在的 TextView, 要移动的最外层小容器}。
-     */
-    private static View[] locate(Object self, int tick) {
-        ArrayList<View> cands = new ArrayList<>();
-        scan(self, 0, cands, new IdentityHashMap<Object, Boolean>(), new int[]{200});
-        if (cands.isEmpty()) return null;
-
-        TextView hit = null;
-        for (View v : cands) {
-            if (v instanceof TextView) {
-                if (hasTime(((TextView) v).getText())) {
-                    hit = (TextView) v;
-                    break;
-                }
-            } else if (v instanceof ViewGroup) {
-                TextView t = findTimeText((ViewGroup) v, new int[]{80});
-                if (t != null) {
-                    hit = t;
-                    break;
-                }
-            }
-        }
-        // 文字还是空的（时间还没写进去）：前几次先等，之后退而求其次，取组件持有的第一个 TextView
-        if (hit == null && tick >= 6) {
-            for (View v : cands) {
-                if (v instanceof TextView) {
-                    hit = (TextView) v;
-                    break;
-                }
-                if (v instanceof ViewGroup) {
-                    TextView t = findAnyText((ViewGroup) v, new int[]{80});
-                    if (t != null) {
-                        hit = t;
-                        break;
-                    }
-                }
-            }
-        }
-        if (hit == null) return null;
-        // 组件自己持有的、包着文字的最小容器（加载出来的那层 LinearLayout）：它才是被抖音显示 / 隐藏的那一层
-        View top = null;
-        View root = hit.getRootView();
-        int rh = root.getHeight();
-        for (View v : cands) {
-            if (v == hit || !(v instanceof ViewGroup) || !isAncestor(v, hit)) continue;
-            if (rh > 0 && v.getHeight() > rh * 0.3f) continue;
-            if (top == null || v.getHeight() * v.getWidth() < top.getHeight() * top.getWidth()) top = v;
-        }
-        return new View[]{hit, top != null ? top : climb(hit)};
-    }
-
-    private static void scan(Object o, int depth, ArrayList<View> out, IdentityHashMap<Object, Boolean> seen, int[] budget) {
-        if (o == null || budget[0] <= 0 || seen.put(o, Boolean.TRUE) != null) return;
-        budget[0]--;
-        if (o instanceof View) {
-            out.add((View) o);
-            return;
-        }
-        Class<?> k = o.getClass();
-        if (k.getName().contains("Lazy")) {
-            try {
-                Method m = k.getMethod("getValue");
-                scan(m.invoke(o), depth, out, seen, budget);
-            } catch (Throwable ignored) {
-            }
-            return;
-        }
-        if (depth >= 3) return;
-        for (Class<?> c = k; c != null && c != Object.class && !isFramework(c.getName()); c = c.getSuperclass()) {
-            for (Field f : c.getDeclaredFields()) {
-                if (Modifier.isStatic(f.getModifiers()) || f.getType().isPrimitive()) continue;
-                try {
-                    f.setAccessible(true);
-                    Object v = f.get(o);
-                    if (v == null) continue;
-                    if (v instanceof View) {
-                        scan(v, depth + 1, out, seen, budget);
-                    } else {
-                        String n = v.getClass().getName();
-                        if (n.contains("Lazy") || isAppClass(n)) scan(v, depth + 1, out, seen, budget);
-                    }
-                } catch (Throwable ignored) {
-                }
-            }
-        }
-    }
-
-    private static boolean isFramework(String n) {
-        return n.startsWith("java.") || n.startsWith("android.") || n.startsWith("androidx.") || n.startsWith("kotlin.");
-    }
-
-    private static boolean isAppClass(String n) {
-        return n.startsWith("com.ss.android.") || n.startsWith("com.bytedance.") || n.startsWith("X.");
-    }
-
-    private static boolean hasTime(CharSequence t) {
-        return t != null && t.length() > 0 && TIME.matcher(t).find();
-    }
-
-    private static TextView findTimeText(ViewGroup g, int[] budget) {
-        for (int i = 0; i < g.getChildCount(); i++) {
-            if (budget[0]-- <= 0) return null;
-            View c = g.getChildAt(i);
-            if (c instanceof TextView) {
-                if (hasTime(((TextView) c).getText())) return (TextView) c;
-            } else if (c instanceof ViewGroup) {
-                TextView t = findTimeText((ViewGroup) c, budget);
-                if (t != null) return t;
-            }
-        }
-        return null;
-    }
-
-    private static TextView findAnyText(ViewGroup g, int[] budget) {
-        for (int i = 0; i < g.getChildCount(); i++) {
-            if (budget[0]-- <= 0) return null;
-            View c = g.getChildAt(i);
-            if (c instanceof TextView) return (TextView) c;
-            if (c instanceof ViewGroup) {
-                TextView t = findAnyText((ViewGroup) c, budget);
-                if (t != null) return t;
-            }
-        }
-        return null;
-    }
-
-    private static boolean isAncestor(View anc, View v) {
-        ViewParent pp = v.getParent();
-        for (int i = 0; i < 12 && pp != null; i++) {
-            if (pp == anc) return true;
-            pp = pp.getParent();
-        }
-        return false;
-    }
-
-    /** 文字外面如果只是一个小的包装容器（底板 / 阴影之类），连它一起移动；最多往上 3 层，碰到大容器就停。 */
-    private static View climb(TextView t) {
-        View v = t;
-        View root = t.getRootView();
-        int w = root.getWidth(), h = root.getHeight();
-        for (int i = 0; i < 3; i++) {
-            ViewParent pp = v.getParent();
-            if (!(pp instanceof ViewGroup)) break;
-            ViewGroup g = (ViewGroup) pp;
-            if (w <= 0 || h <= 0 || g.getWidth() <= 0 || g.getWidth() > w * 0.6f || g.getHeight() > h * 0.25f) break;
-            v = g;
-        }
-        return v;
     }
 }
