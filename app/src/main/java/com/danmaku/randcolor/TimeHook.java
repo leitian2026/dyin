@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
+import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
@@ -46,9 +47,21 @@ final class TimeHook {
     private static final String OBS_FRAME = COMP + "$onCreate$1";
     private static final String OBS_SHOW = COMP + "$onCreate$2";
 
+    /**
+     * 第 4 层（版本相关，40.7.0）：进度条各组件的公共父类 X.0qVI，里面的 LJJJJZ() 是「按需加载」入口——
+     * 拖动开始(true)时由各组件的观察者调用，先取 ViewStub，没加载好就异步加载并返回 false。
+     * X.0qVF 是其中的时间组件。不拖动时没人调它，所以时间 View 平时根本不存在。
+     */
+    private static final String BASE = "X.0qVI";
+    private static final String IMPL = "X.0qVF";
+    private static final String LOADER = "LJJJJZ";
+
     private static final Pattern TIME = Pattern.compile("\\d{1,3}:\\d{2}");
 
-    private static volatile boolean frameHooked, showHooked, anyApplied, loggedOk;
+    private static volatile boolean frameHooked, showHooked, loadHooked, anyApplied, loggedOk;
+    private static volatile Method loader;
+    private static volatile boolean selfCalling;
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static int misses;
 
     // 诊断浮层用：最近一次找到的时间 View、状态说明
@@ -73,20 +86,146 @@ final class TimeHook {
 
     /** 目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到两个观察者都挂上。 */
     static void tryHook(ClassLoader cl) {
-        if (cl == null || (frameHooked && showHooked)) return;
+        if (cl == null || (frameHooked && showHooked && loadHooked)) return;
         attempt(cl);
-        if (!(frameHooked && showHooked)) {
+        if (!(frameHooked && showHooked && loadHooked)) {
             ClassLoader ctx = Thread.currentThread().getContextClassLoader();
             if (ctx != null && ctx != cl) attempt(ctx);
         }
-        if (!(frameHooked && showHooked) && ++misses == 6) {
-            XposedBridge.log("[DanmakuColor] time hook: classes not found yet (frame=" + frameHooked + ", show=" + showHooked + ")");
+        if (!(frameHooked && showHooked && loadHooked) && ++misses == 6) {
+            XposedBridge.log("[DanmakuColor] time hook: classes not found yet (frame=" + frameHooked
+                    + ", show=" + showHooked + ", load=" + loadHooked + ")");
         }
     }
 
     private static void attempt(ClassLoader cl) {
         if (!showHooked) showHooked = hookObserver(cl, OBS_SHOW, new ShowHook());
         if (!frameHooked) frameHooked = hookObserver(cl, OBS_FRAME, new FrameHook());
+        if (!loadHooked) loadHooked = hookLoader(cl);
+    }
+
+    // ------------------------------------------------------------ 第 4 层：加载入口 X.0qVI#LJJJJZ()
+
+    private static boolean hookLoader(ClassLoader cl) {
+        try {
+            Class<?> base = Class.forName(BASE, false, cl);
+            Method found = null;
+            for (Method m : base.getDeclaredMethods()) {
+                if (m.getName().equals(LOADER) && m.getParameterTypes().length == 0 && m.getReturnType() == boolean.class) {
+                    found = m;
+                    break;
+                }
+            }
+            if (found == null) {
+                XposedBridge.log("[DanmakuColor] time loader " + BASE + "#" + LOADER + "() not found");
+                return true; // 签名变了：别反复重试
+            }
+            found.setAccessible(true);
+            loader = found;
+            XposedBridge.hookMethod(found, new LoadHook());
+            XposedBridge.hookAllConstructors(base, new CtorHook());
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false; // 还没加载：下次回到前台再试
+        } catch (Throwable t) {
+            XposedBridge.log("[DanmakuColor] time loader hook failed: " + t);
+            return true;
+        }
+    }
+
+    private static boolean isTimeComp(Object o) {
+        return o != null && o.getClass().getName().equals(IMPL);
+    }
+
+    /** 时间组件一创建（首帧 / 换视频），就替用户完成「第一次拖动」那一步：自己调一次加载入口。 */
+    private static final class CtorHook extends XC_MethodHook {
+        @Override
+        protected void afterHookedMethod(MethodHookParam p) {
+            try {
+                if (!DanmakuHook.cfg.timeAlways || !isTimeComp(p.thisObject)) return;
+                MAIN.postDelayed(new Boot(p.thisObject, 0), 800); // 等构造和 onCreate 走完再调
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** 抖音自己（用户拖动）调了加载入口：加载完同样要把时间 View 找出来套用。我们自己调的那次不重复处理。 */
+    private static final class LoadHook extends XC_MethodHook {
+        @Override
+        protected void afterHookedMethod(MethodHookParam p) {
+            try {
+                if (selfCalling || !DanmakuHook.cfg.timeAlways || !isTimeComp(p.thisObject)) return;
+                MAIN.postDelayed(new Boot(p.thisObject, 1), 400);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** 0 调加载入口 → 1/2 找 View 并套用 → 3 再调一次加载入口 → 4/5 再找。找到就停，最多约 5 秒，没有常驻定时器。 */
+    private static final class Boot implements Runnable {
+        private static final int[] NEXT = {400, 800, 1500, 600, 1500};
+        private final Object o;
+        private int stage;
+
+        Boot(Object o, int stage) {
+            this.o = o;
+            this.stage = stage;
+        }
+
+        @Override
+        public void run() {
+            try {
+                if (!DanmakuHook.cfg.timeAlways) return;
+                if (stage == 0 || stage == 3) {
+                    callLoader(o);
+                } else if (applyOnce(o)) {
+                    return;
+                } else if (stage >= 5) {
+                    lastNote = "加载入口调过了，但没找到时间 View";
+                    XposedBridge.log("[DanmakuColor] time view not found after load, comp=" + o.getClass().getName());
+                    return;
+                }
+                if (stage < NEXT.length) MAIN.postDelayed(this, NEXT[stage]);
+                stage++;
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private static void callLoader(Object o) {
+        Method m = loader;
+        if (m == null) return;
+        selfCalling = true;
+        try {
+            m.invoke(o);
+        } catch (Throwable t) {
+            lastNote = "调加载入口失败: " + t;
+        } finally {
+            selfCalling = false;
+        }
+    }
+
+    /** 从时间组件自己出发找时间 View（加载完它的字段里就有了），找到就套用。 */
+    private static boolean applyOnce(Object o) {
+        DanmakuConfig c = DanmakuHook.cfg;
+        State s;
+        synchronized (STATES) {
+            s = STATES.get(o);
+            if (s == null) {
+                s = new State();
+                STATES.put(o, s);
+            }
+        }
+        View[] f = locate(o, 99);
+        if (f == null) return false;
+        s.tv = new WeakReference<>(f[0]);
+        s.top = new WeakReference<>(f[1]);
+        lastTv = s.tv;
+        lastTop = s.top;
+        lastNote = "加载入口调用后找到并套用";
+        apply(s, f[0], f[1], c);
+        s.cfgRef = c;
+        return true;
     }
 
     private static boolean hookObserver(ClassLoader cl, String name, XC_MethodHook cb) {
@@ -321,7 +460,7 @@ final class TimeHook {
 
     private static String buildInfo(View decor) {
         StringBuilder sb = new StringBuilder("[时长诊断]\n");
-        sb.append("钩子 frame=").append(frameHooked).append(" show=").append(showHooked).append('\n');
+        sb.append("钩子 frame=").append(frameHooked).append(" show=").append(showHooked).append(" load=").append(loadHooked).append('\n');
         sb.append("状态 ").append(lastNote).append('\n');
         sb.append("屏幕 ").append(decor.getWidth()).append('x').append(decor.getHeight()).append('\n');
         View tv = lastTv == null ? null : lastTv.get();
@@ -425,10 +564,26 @@ final class TimeHook {
                     hit = (TextView) v;
                     break;
                 }
+                if (v instanceof ViewGroup) {
+                    TextView t = findAnyText((ViewGroup) v, new int[]{80});
+                    if (t != null) {
+                        hit = t;
+                        break;
+                    }
+                }
             }
         }
         if (hit == null) return null;
-        return new View[]{hit, climb(hit)};
+        // 组件自己持有的、包着文字的最小容器（加载出来的那层 LinearLayout）：它才是被抖音显示 / 隐藏的那一层
+        View top = null;
+        View root = hit.getRootView();
+        int rh = root.getHeight();
+        for (View v : cands) {
+            if (v == hit || !(v instanceof ViewGroup) || !isAncestor(v, hit)) continue;
+            if (rh > 0 && v.getHeight() > rh * 0.3f) continue;
+            if (top == null || v.getHeight() * v.getWidth() < top.getHeight() * top.getWidth()) top = v;
+        }
+        return new View[]{hit, top != null ? top : climb(hit)};
     }
 
     private static void scan(Object o, int depth, ArrayList<View> out, IdentityHashMap<Object, Boolean> seen, int[] budget) {
@@ -491,6 +646,28 @@ final class TimeHook {
             }
         }
         return null;
+    }
+
+    private static TextView findAnyText(ViewGroup g, int[] budget) {
+        for (int i = 0; i < g.getChildCount(); i++) {
+            if (budget[0]-- <= 0) return null;
+            View c = g.getChildAt(i);
+            if (c instanceof TextView) return (TextView) c;
+            if (c instanceof ViewGroup) {
+                TextView t = findAnyText((ViewGroup) c, budget);
+                if (t != null) return t;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isAncestor(View anc, View v) {
+        ViewParent pp = v.getParent();
+        for (int i = 0; i < 12 && pp != null; i++) {
+            if (pp == anc) return true;
+            pp = pp.getParent();
+        }
+        return false;
     }
 
     /** 文字外面如果只是一个小的包装容器（底板 / 阴影之类），连它一起移动；最多往上 3 层，碰到大容器就停。 */
