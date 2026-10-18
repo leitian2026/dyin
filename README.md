@@ -1,4 +1,4 @@
-# DanmakuColor — 抖音弹幕随机色 + 点赞改打开评论 + 视频时长常显（LSPosed 模块）
+# dyin（DanmakuColor）— 抖音弹幕随机色 + 点赞改打开评论 + 视频时长常显（LSPosed 模块）
 
 ## 功能
 1. **弹幕随机色**：每条弹幕随机颜色，保留黑色描边。
@@ -12,6 +12,15 @@
 ## 使用
 1. LSPosed 启用模块，作用域勾选抖音，强杀抖音重开。
 2. 打开模块设置，点「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
+
+## 1.14.0：改名 dyin + 新图标 + 用第 4 层 `X.0qVI#LJJJJZ()` 做加载入口
+- 应用名改为 `dyin`，图标换成新的（自适应图标：白底 + 黑色图案，`res/drawable-nodpi/ic_launcher_fg.png`）。
+- 根据 TextRec 第二轮追踪（40.7.0）：时间组件 `X.0qVF` 继承公共父类 `X.0qVI`；`X.0qVI#LJJJJZ(): boolean` 只在拖动开始(true)时被各组件观察者调用，它直接调用 `X.0qVF#LJJJLIIL()`（返回 ViewStub），返回 false，随后协程把加载出的 `LinearLayout` 交给 `X.0qVF#LJJJJZI` 绑定。不拖动时没人调它，时间 View 平时不存在。
+- 新增：钩 `X.0qVI` 的构造方法，时间组件（`X.0qVF`）一创建（首帧 / 换视频）约 0.8 秒后自己调一次 `LJJJJZ()`，替用户完成第一次加载；随后从组件自己的字段里找时间 View，强制可见并套用偏移，找到即停（最多约 5 秒，无常驻定时器）。用户自己拖动触发的加载也走同一套套用逻辑。
+- 保留：`$onCreate$2` 把参数一律改成 true（松手不收起）、`$onCreate$1` 每帧回调套用。
+- 找 View 的改动：文字外面如果有组件自己持有的、高度不超过屏幕 30% 的容器（加载出来的那层 LinearLayout），把它当作被显示 / 隐藏的那一层一起处理。
+- 未验证：加载完成后时间文字是否随播放更新（取决于 `$onCreate$1` 在不拖动时是否仍被调用）。设置页「显示诊断信息」里多了 `load=` 状态。
+- 版本相关：`TimeHook.BASE`（`X.0qVI`）、`IMPL`（`X.0qVF`）、`LOADER`（`LJJJJZ`）。
 
 ## 1.13：视频时长常显 + 位置可调
 - 根据 TextRec 的追踪（40.7.0）：`ProTimeDescViewComponent$onCreate$1#onChanged` 播放时每帧更新时间文字；`$onCreate$2#onChanged(Boolean)` 只在拖动开始(true) / 松手(false) 时调用，是显示开关。
