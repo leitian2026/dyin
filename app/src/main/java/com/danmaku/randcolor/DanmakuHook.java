@@ -44,6 +44,7 @@ final class DanmakuHook {
         reload();
         tryInstall(lp.classLoader);
         CommentHook.tryHook(lp.classLoader);
+        TimeHook.tryHook(lp.classLoader);
         hookResume();
     }
 
@@ -72,6 +73,7 @@ final class DanmakuHook {
                             CommentHook.top = new java.lang.ref.WeakReference<>(a);
                             ClassLoader cl = a.getClass().getClassLoader();
                             CommentHook.tryHook(cl);
+                            TimeHook.tryHook(cl);
                             if (!installed) tryInstall(cl); // Compose 类可能晚于进程启动才可用
                         }
                     } catch (Throwable ignored) {
