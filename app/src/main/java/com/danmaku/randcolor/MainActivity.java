@@ -34,7 +34,7 @@ public class MainActivity extends Activity {
     private int cBg, cCard, cStroke, cText, cSub, cPrimary, cPrimarySoft, cField;
 
     private EditText etPkg;
-    private Switch swEnabled, swLikeBtn, swDtap, swTime, swTimeDbg;
+    private Switch swEnabled, swLikeBtn, swDtap, swTime;
     private LinearLayout segMode, segKey, segStep, statusCard;
     private TextView tvOffset;
     private int tDx, tDy;
@@ -133,19 +133,16 @@ public class MainActivity extends Activity {
         root.addView(section("视频时长常显"));
         LinearLayout tm = card();
         swTime = new Switch(this);
-        tm.addView(switchRow("视频时长一直显示", "沿用抖音拖动进度条时的时间文字（形如 00:12 / 03:45），播放时一直显示，不用碰进度条", swTime));
+        tm.addView(switchRow("视频时长一直显示", "在视频上自己画一行 00:12 / 03:45，播放时随进度走动，不用碰进度条；离开视频页自动隐藏", swTime));
         tm.addView(divider());
         tm.addView(tv("位置微调", 17, cText, true));
-        TextView td = tv("以抖音原来的位置为起点移动（右、下为正，单位 dp）。点箭头走一格，长按连续移动；改完点下方「保存并应用」。", 13, cSub, false);
+        TextView td = tv("默认在屏幕正中，以此为起点移动（右、下为正，单位 dp）。点箭头走一格，长按连续移动；改完点下方「保存并应用」。", 13, cSub, false);
         td.setPadding(0, dp(2), 0, dp(10));
         tm.addView(td);
         segStep = segmented("细（2）", "中（10）", "粗（40）");
         setSeg(segStep, 1);
         tm.addView(segStep);
         tm.addView(dpad());
-        tm.addView(divider());
-        swTimeDbg = new Switch(this);
-        tm.addView(switchRow("显示诊断信息（调试用）", "抖音屏幕左上角出一小块黑底绿字：钩子有没有挂上、时间 View 的屏幕坐标 / 宽高 / 可见性，并给它涂半透明红底。调好位置后关掉", swTimeDbg));
         root.addView(tm, cardLp());
 
         // ---- 状态（有内容才显示）
@@ -172,7 +169,6 @@ public class MainActivity extends Activity {
         swLikeBtn.setChecked(c.likeBtnToComment);
         swDtap.setChecked(c.dtapToComment);
         swTime.setChecked(c.timeAlways);
-        swTimeDbg.setChecked(c.timeDebug);
         tDx = c.timeDx;
         tDy = c.timeDy;
         showOffset();
@@ -188,7 +184,6 @@ public class MainActivity extends Activity {
         c.likeBtnToComment = swLikeBtn.isChecked();
         c.dtapToComment = swDtap.isChecked();
         c.timeAlways = swTime.isChecked();
-        c.timeDebug = swTimeDbg.isChecked();
         c.timeDx = tDx;
         c.timeDy = tDy;
         return c;
