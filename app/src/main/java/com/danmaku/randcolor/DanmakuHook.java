@@ -74,6 +74,7 @@ final class DanmakuHook {
                             ClassLoader cl = a.getClass().getClassLoader();
                             CommentHook.tryHook(cl);
                             TimeHook.tryHook(cl);
+                            TimeHook.onResume(a);
                             if (!installed) tryInstall(cl); // Compose 类可能晚于进程启动才可用
                         }
                     } catch (Throwable ignored) {
