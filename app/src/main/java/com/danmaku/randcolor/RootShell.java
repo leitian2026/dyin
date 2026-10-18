@@ -127,4 +127,18 @@ final class RootShell {
                 + "echo __OK__\n";
         return run(script, 30);
     }
+
+    /** 读回目标 App 数据目录里的配置文本（位置浮窗在抖音里改过数值后，模块用它同步）。读不到返回 null。 */
+    static String readConfig(String pkg) {
+        if (!validPkg(pkg)) return null;
+        String script = findDirs(pkg)
+                + "for D in $DIRS; do\n"
+                + "F=$D/files/danmaku_color.properties\n"
+                + "if [ -f $F ]; then cat $F; echo; echo __OK__; exit 0; fi\n"
+                + "done\n"
+                + "echo __NOFILE__\n";
+        Result r = run(script, 20);
+        int i = r.out.indexOf("__OK__");
+        return i < 0 ? null : r.out.substring(0, i);
+    }
 }
