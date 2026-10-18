@@ -26,8 +26,6 @@ public final class DanmakuConfig {
     public int timeX = 0, timeY = 0;
     /** 一次性请求：抖音回到前台时弹出「位置浮窗」，弹出后立即被抖音清掉。 */
     public boolean timeAdjust = false;
-    /** 已废弃（1.15 起没有作用，键保留以兼容旧配置）。 */
-    public boolean timeDebug = false;
 
     public String toText() {
         try {
@@ -38,7 +36,6 @@ public final class DanmakuConfig {
             p.setProperty("likeBtnToComment", String.valueOf(likeBtnToComment));
             p.setProperty("dtapToComment", String.valueOf(dtapToComment));
             p.setProperty("timeAlways", String.valueOf(timeAlways));
-            p.setProperty("timeDebug", String.valueOf(timeDebug));
             p.setProperty("timeX", String.valueOf(timeX));
             p.setProperty("timeY", String.valueOf(timeY));
             p.setProperty("timeAdjust", String.valueOf(timeAdjust));
@@ -79,7 +76,6 @@ public final class DanmakuConfig {
         c.likeBtnToComment = Boolean.parseBoolean(p.getProperty("likeBtnToComment", "false").trim());
         c.dtapToComment = Boolean.parseBoolean(p.getProperty("dtapToComment", "false").trim());
         c.timeAlways = Boolean.parseBoolean(p.getProperty("timeAlways", "false").trim());
-        c.timeDebug = Boolean.parseBoolean(p.getProperty("timeDebug", "false").trim());
         c.timeX = parseOffset(p.getProperty("timeX", "0"));
         c.timeY = parseOffset(p.getProperty("timeY", "0"));
         c.timeAdjust = Boolean.parseBoolean(p.getProperty("timeAdjust", "false").trim());
