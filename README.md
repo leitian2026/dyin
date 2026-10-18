@@ -13,6 +13,9 @@
 1. LSPosed 启用模块，作用域勾选抖音，强杀抖音重开。
 2. 打开模块设置，点「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
+## 1.16.4：弹幕颜色始终按文字固定（修弹幕多时闪色）
+TextRec 记录显示弹幕不是每帧重绘：每条弹幕只在缓存层被重新录制时才走几次 `MultiParagraph.paint`。原来按 `MultiParagraph` 对象身份取色，重新录制时对象可能是新的，颜色就跟着变，弹幕多时表现为闪几下。现在颜色始终由弹幕文字决定，同一条弹幕每次都同色；代价是相同文字同色。设置页里「同一条弹幕怎么固定颜色」已去掉；`keyByText` 配置键保留但不再起作用。文字读不到时才退回按对象。没有在真机上验证过。
+
 ## 1.16.3：时长改钩播放分发器，状态方法用 TextRec 追到的真名
 TextRec 追踪（40.7.0）发现：`DIPlayListenerDispatcher`（`com.ss.android.ugc.aweme.o.oplayer.util`，主线程）是播放事件的共用入口，进度和状态回调都经过它，**每个事件只到一次**；1.16.2 挂的 `OnUIPlayListenerDelegate` 在它下面，每个事件会被 5～6 个包装监听器重复收到（进度一次 8～9 遍）。
 - 进度：`onPlayProgressChange(String id, long 位置ms, long 总时长ms)`（同上）。
