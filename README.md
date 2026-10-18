@@ -16,7 +16,8 @@
 ## 1.16.3：时长改钩播放分发器，状态方法用 TextRec 追到的真名
 TextRec 追踪（40.7.0）发现：`DIPlayListenerDispatcher`（`com.ss.android.ugc.aweme.o.oplayer.util`，主线程）是播放事件的共用入口，进度和状态回调都经过它，**每个事件只到一次**；1.16.2 挂的 `OnUIPlayListenerDelegate` 在它下面，每个事件会被 5～6 个包装监听器重复收到（进度一次 8～9 遍）。
 - 进度：`onPlayProgressChange(String id, long 位置ms, long 总时长ms)`（同上）。
-- 状态（真实名字，不再按关键字猜）：`onPlayStop` / `onPlayRelease` 隐藏；`onPausePlay` / `onPlayPause` 暂停；`onPlaying` / `onRenderFirstFrame` 新视频开始，立刻显示，`onPlaying` 的 `PlayerEvent` 里读 `duration` 作为总时长。`onPreparePlay` 不用（预加载的视频也会走）。
+- 状态（真实名字，不再按关键字猜）：`onPlayStop` / `onPlayRelease` 隐藏；暂停不处理，文字保持显示；`onPlaying` / `onRenderFirstFrame` 新视频开始，立刻显示，`onPlaying` 的 `PlayerEvent` 里读 `duration` 作为总时长。`onPreparePlay` 不用（预加载的视频也会走）。
+- **删除了模块自己的检测逻辑**：`ProSeekBarView#setProgress` 钩子（播放时每次动画都调，耗电）、暂停时看进度条还在不在的检查、1 秒看门狗、对应的延时消息。现在没有任何定时器，也没有轮询。换视频的判断也不再用时间窗口：进度和状态回调都带视频 id，只认当前播放的那个，`onPlayStop` / `onPlayRelease` 停掉的视频之后迟到的进度按 id 忽略，直到它再次 `onPlaying`。
 - 一次翻页的事件顺序（追踪实测，同一秒内）：旧视频 `onPlayStop` → `onPlayRelease`，新视频 `onPreparePlay` → `onPlaying`，约 1 秒内 `onRenderFirstFrame`。
 - 没有在真机上验证过。如果翻页过程中（手指还在滑）文字不消失，是因为这些事件都在翻页落定时才到，需要再追页面滑动的信号。
 
@@ -72,7 +73,7 @@ TextRec 追踪（40.7.0）发现：`DIPlayListenerDispatcher`（`com.ss.android.
 - 如果双击后还是点赞了或出了红心，说明还有别的入口，把现象告诉我；1.11.1 是旧方案，可以回退。
 
 ## 抖音版本相关（换版本后可能要改）
-- `TimeHook.DELEGATE`（播放分发器）/ `PROGRESS` / `SEEKBAR`，以及 `TimeHook.kindOf` 里的状态方法名：时长显示用到的类名和方法名。
+- `TimeHook.DELEGATE`（播放分发器）/ `PROGRESS`，以及 `TimeHook.kindOf` 里的状态方法名：时长显示用到的类名和方法名。
 - `CommentHook.DIGG_CLICK_METHOD`（`LJJJJJL`）：爱心按钮点击入口。
 - `BaseListFragmentPanel#LLLIILIL(MotionEvent)`：双击的统一入口（红心和点赞都在它下面）。
 - 评论按钮靠 contentDescription「评论N，按钮」查找。
