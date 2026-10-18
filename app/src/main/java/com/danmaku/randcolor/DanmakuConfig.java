@@ -20,11 +20,11 @@ public final class DanmakuConfig {
     public boolean likeBtnToComment = false;
     /** 双击视频时，不点赞、不出红心，改为打开评论。 */
     public boolean dtapToComment = false;
-    /** 视频时长一直显示（沿用抖音拖动进度条时的 00:12 / 03:45）。 */
+    /** 视频时长一直显示（自己画一行 00:12 / 03:45）。 */
     public boolean timeAlways = false;
-    /** 时长文字相对抖音原位置的偏移，单位 dp。右、下为正。 */
+    /** 时长文字相对屏幕正中的偏移，单位 dp。右、下为正。 */
     public int timeDx = 0, timeDy = 0;
-    /** 诊断浮层：屏幕左上角显示时间 View 的坐标、宽高、可见性（调试用）。 */
+    /** 已废弃（1.15 起没有作用，键保留以兼容旧配置）。 */
     public boolean timeDebug = false;
 
     public String toText() {
