@@ -20,6 +20,10 @@ public final class DanmakuConfig {
     public boolean likeBtnToComment = false;
     /** 双击视频时，不点赞、不出红心，改为打开评论。 */
     public boolean dtapToComment = false;
+    /** 视频时长一直显示（沿用抖音拖动进度条时的 00:12 / 03:45）。 */
+    public boolean timeAlways = false;
+    /** 时长文字相对抖音原位置的偏移，单位 dp。右、下为正。 */
+    public int timeDx = 0, timeDy = 0;
 
     public String toText() {
         try {
@@ -29,6 +33,9 @@ public final class DanmakuConfig {
             p.setProperty("keyByText", String.valueOf(keyByText));
             p.setProperty("likeBtnToComment", String.valueOf(likeBtnToComment));
             p.setProperty("dtapToComment", String.valueOf(dtapToComment));
+            p.setProperty("timeAlways", String.valueOf(timeAlways));
+            p.setProperty("timeDx", String.valueOf(timeDx));
+            p.setProperty("timeDy", String.valueOf(timeDy));
             ByteArrayOutputStream bo = new ByteArrayOutputStream();
             p.store(bo, null);
             return new String(bo.toByteArray(), StandardCharsets.ISO_8859_1);
@@ -65,10 +72,21 @@ public final class DanmakuConfig {
         c.keyByText = Boolean.parseBoolean(p.getProperty("keyByText", "false").trim());
         c.likeBtnToComment = Boolean.parseBoolean(p.getProperty("likeBtnToComment", "false").trim());
         c.dtapToComment = Boolean.parseBoolean(p.getProperty("dtapToComment", "false").trim());
+        c.timeAlways = Boolean.parseBoolean(p.getProperty("timeAlways", "false").trim());
+        c.timeDx = parseOffset(p.getProperty("timeDx", "0"));
+        c.timeDy = parseOffset(p.getProperty("timeDy", "0"));
         try {
             c.mode = Integer.parseInt(p.getProperty("mode", "0").trim()) == 1 ? 1 : 0;
         } catch (Throwable t) {
             c.mode = 0;
+        }
+    }
+
+    private static int parseOffset(String v) {
+        try {
+            return Math.max(-2000, Math.min(2000, Integer.parseInt(v.trim())));
+        } catch (Throwable t) {
+            return 0;
         }
     }
 
