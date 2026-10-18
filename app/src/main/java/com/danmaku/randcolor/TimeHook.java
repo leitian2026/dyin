@@ -1,11 +1,9 @@
 package com.danmaku.randcolor;
 
 import android.app.Activity;
-import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -15,7 +13,6 @@ import android.widget.TextView;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.Locale;
 import java.util.Set;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -26,10 +23,10 @@ import de.robv.android.xposed.XposedBridge;
  *
  * 数据和状态都来自播放分发器 DIPlayListenerDispatcher（40.7.0，主线程，每个事件只到一次，不像下层包装监听器会重复十几次）：
  *  - onPlayProgressChange(String 视频id, long 位置ms, long 总时长ms)：更新文字。
- *  - 状态回调（TextRec 追踪到的真实名字）：onPlayStop / onPlayRelease 隐藏；onPausePlay / onPlayPause 暂停；
+ *  - 状态回调（TextRec 追踪到的真实名字）：onPlayStop / onPlayRelease 隐藏；
  *    onPlaying / onRenderFirstFrame 新视频开始播放，立刻显示（onPlaying 的 PlayerEvent 里带 duration）。
- *  - 兜底看门狗：只有一条 1 秒的延时消息，1 秒没有进度回调才检查进度条（暂停时还在屏幕上就继续显示）。没有任何周期性轮询。
- *  - 换视频后 1 秒内忽略刚离开的那个视频的进度回调（新旧回调交错会让文字来回跳）。
+ *    暂停不处理（文字保持显示）。没有看门狗、没有进度条钩子、没有任何定时器。
+ *  - 进度和状态回调都带视频 id：只认当前播放的那个视频，停掉的视频之后迟到的进度直接忽略，不用任何时间窗口。
  *
  * 位置（px）由抖音里的位置浮窗（TimePanel）调整。
  */
@@ -39,37 +36,29 @@ final class TimeHook {
     /** 版本相关（40.7.0）。 */
     private static final String DELEGATE = "com.ss.android.ugc.aweme.o.oplayer.util.DIPlayListenerDispatcher";
     private static final String PROGRESS = "onPlayProgressChange";
-    private static final String SEEKBAR = "com.ss.android.ugc.aweme.o.seekbar.views.seekbar.ProSeekBarView";
 
-    private static final long IDLE_MS = 1000;   // 兜底：多久没有进度回调才去看进度条
-    private static final long STALE_MS = 1000;  // 换视频后忽略旧视频回调的时间
-    private static final long PAUSE_CHECK_MS = 150;
-
-    private static final int K_OTHER = 0, K_STOP = 1, K_PAUSE = 2, K_FIRST = 3;
+    private static final int K_OTHER = 0, K_STOP = 1, K_FIRST = 3;
     private static final String PLACEHOLDER = "00:00 / --:--";
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
-    private static volatile boolean progressHooked, seekHooked, eventsHooked;
+    private static volatile boolean progressHooked, eventsHooked;
     private static int misses;
 
-    private static WeakReference<View> seekRef = new WeakReference<>(null);
     private static WeakReference<TextView> viewRef = new WeakReference<>(null);
-    private static final Rect TMP = new Rect();
 
     // 状态（都在主线程用）
-    private static String lastId, staleId;
-    private static long lastSec = -1, lastDsec = -2, lastTickAt, staleUntil;
+    private static String lastId, stoppedId; // 当前播放的视频 id；刚停掉的视频 id（它之后迟到的进度不再显示）
+    private static long lastSec = -1, lastDsec = -2;
     private static String lastText = "";
     private static int lastDx = Integer.MIN_VALUE, lastDy = Integer.MIN_VALUE;
-    private static int pauseChecks;
-    private static boolean loggedOk, shown, watching;
+    private static boolean loggedOk, shown;
 
     // ------------------------------------------------------------ 安装
 
     /** 目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到都挂上。 */
     static void tryHook(ClassLoader cl) {
-        if (cl == null || (progressHooked && seekHooked && eventsHooked)) return;
+        if (cl == null || (progressHooked && eventsHooked)) return;
         attempt(cl);
         if (!progressHooked) {
             ClassLoader ctx = Thread.currentThread().getContextClassLoader();
@@ -82,7 +71,6 @@ final class TimeHook {
 
     private static void attempt(ClassLoader cl) {
         if (!progressHooked) progressHooked = hookAll(cl, DELEGATE, PROGRESS, new ProgressHook());
-        if (!seekHooked) seekHooked = hookAll(cl, SEEKBAR, "setProgress", new SeekHook());
         if (progressHooked && !eventsHooked) eventsHooked = hookEvents(cl);
     }
 
@@ -137,9 +125,6 @@ final class TimeHook {
             case "onPlayStop":
             case "onPlayRelease":
                 return K_STOP;
-            case "onPausePlay":
-            case "onPlayPause":
-                return K_PAUSE;
             case "onPlaying":
             case "onRenderFirstFrame":
                 return K_FIRST;
@@ -208,15 +193,6 @@ final class TimeHook {
         }
     }
 
-    /** 进度条自己（播放时每次进度动画都会调 setProgress）：只记下这个 View，用来判断暂停时还在不在屏幕上。 */
-    private static final class SeekHook extends XC_MethodHook {
-        @Override
-        protected void afterHookedMethod(MethodHookParam p) {
-            Object o = p.thisObject;
-            if (o instanceof View && seekRef.get() != o) seekRef = new WeakReference<>((View) o);
-        }
-    }
-
     /** 参数里的 PlayerEvent（toString 里有 duration=…）读出总时长 ms；读不到返回 -1。 */
     private static long durationOf(Object[] a) {
         if (a == null) return -1;
@@ -263,21 +239,22 @@ final class TimeHook {
 
     private static void onEvent(int kind, String id, long dur) {
         if (!enabled()) return;
-        boolean mine = id == null || id.equals(lastId); // 别的视频播放器的事件（比如旧视频迟到的 stop）不动当前文字
         switch (kind) {
             case K_STOP:
-                if (mine) hideNow();
-                break;
-            case K_PAUSE:
-                // 用户手动暂停：进度条还在屏幕上，保持显示；翻页离开引起的暂停：进度条已经走了，隐藏
-                if (mine && shown) {
-                    pauseChecks = 0;
-                    MAIN.removeCallbacks(PAUSE_CHECK);
-                    MAIN.postDelayed(PAUSE_CHECK, PAUSE_CHECK_MS);
+                // 只处理当前视频的停止；别的视频的事件（比如旧视频迟到的 stop）不动当前文字
+                if (id == null || id.equals(lastId)) {
+                    stoppedId = lastId;
+                    lastId = null;
+                    hideNow();
                 }
                 break;
-            case K_FIRST: // 新视频开始播放：马上画出来（onPlaying 里带总时长就直接用），不等第一个进度回调
-                if (switchTo(id) || !shown) {
+            case K_FIRST: // 视频开始播放：马上画出来（onPlaying 里带总时长就直接用），不等第一个进度回调
+                if (id == null) break;
+                if (id.equals(stoppedId)) stoppedId = null;
+                if (!id.equals(lastId) || !shown) {
+                    lastId = id;
+                    lastSec = -1;
+                    lastDsec = -2;
                     String tail = dur > 0 ? fmt(dur / 1000) : "--:--";
                     show(CommentHook.top.get(), "00:00 / " + tail);
                 }
@@ -287,29 +264,6 @@ final class TimeHook {
         }
     }
 
-    /** 记下当前视频；视频变了返回 true，并把旧视频记成「刚离开」。 */
-    private static boolean switchTo(String id) {
-        if (id == null || id.equals(lastId)) return false;
-        staleId = lastId;
-        staleUntil = SystemClock.uptimeMillis() + STALE_MS;
-        lastId = id;
-        lastSec = -1;
-        lastDsec = -2;
-        return true;
-    }
-
-    private static final Runnable PAUSE_CHECK = new Runnable() {
-        @Override
-        public void run() {
-            try {
-                if (!shown || TimePanel.isOpen()) return;
-                if (!seekbarOn()) hideNow();
-                else if (++pauseChecks < 3) MAIN.postDelayed(this, 250); // 翻页动画还没走完：再看两次
-            } catch (Throwable ignored) {
-            }
-        }
-    };
-
     // ------------------------------------------------------------ 进度
 
     private static void onProgress(String id, long pos, long dur) {
@@ -317,19 +271,18 @@ final class TimeHook {
             removeView();
             return;
         }
-        long now = SystemClock.uptimeMillis();
-        boolean newVideo = id != null && !id.equals(lastId);
-        if (newVideo) {
-            if (id.equals(staleId) && now < staleUntil) return; // 刚离开的那个视频的尾巴
-            switchTo(id);
+        if (id != null) {
+            if (id.equals(stoppedId)) return;              // 刚停掉的视频迟到的进度
+            if (lastId != null && !id.equals(lastId)) return; // 不是当前播放的视频
+            if (lastId == null) {                           // 装钩子时视频已经在播：认下它
+                lastId = id;
+                lastSec = -1;
+                lastDsec = -2;
+            }
         }
         long sec = pos > 0 ? pos / 1000 : 0;
         long dsec = dur > 0 ? dur / 1000 : -1;
-        if (shown && sec == lastSec && dsec == lastDsec) { // 秒数没变：只记心跳
-            lastTickAt = now;
-            armWatchdog();
-            return;
-        }
+        if (shown && sec == lastSec && dsec == lastDsec) return; // 秒数没变
         if (dsec >= 0 && sec > dsec) sec = dsec;
         lastSec = sec;
         lastDsec = dsec;
@@ -411,8 +364,6 @@ final class TimeHook {
         }
         if (t.getVisibility() != View.VISIBLE) t.setVisibility(View.VISIBLE);
         shown = true;
-        lastTickAt = SystemClock.uptimeMillis();
-        armWatchdog();
     }
 
     private static void applyOffset(TextView t) {
@@ -435,40 +386,8 @@ final class TimeHook {
         shown = false;
         lastSec = -1;
         lastDsec = -2;
-        MAIN.removeCallbacks(PAUSE_CHECK);
         TextView t = viewRef.get();
         if (t != null) t.setVisibility(View.GONE);
-    }
-
-    // ------------------------------------------------------------ 兜底看门狗
-
-    private static void armWatchdog() {
-        if (watching) return; // 已经有一条在排队：不要因为回调频繁到达而反复重排
-        watching = true;
-        MAIN.postDelayed(WATCHDOG, IDLE_MS);
-    }
-
-    private static final Runnable WATCHDOG = new Runnable() {
-        @Override
-        public void run() {
-            watching = false;
-            try {
-                if (!shown || TimePanel.isOpen()) return;
-                long idle = SystemClock.uptimeMillis() - lastTickAt;
-                if (idle < IDLE_MS) { // 期间还有回调：只等剩下的时间
-                    watching = true;
-                    MAIN.postDelayed(this, IDLE_MS - idle);
-                    return;
-                }
-                if (!seekbarOn()) hideNow(); // 暂停时进度条还在屏幕上：保持显示，不再排队
-            } catch (Throwable ignored) {
-            }
-        }
-    };
-
-    private static boolean seekbarOn() {
-        View sb = seekRef.get();
-        return sb != null && sb.isAttachedToWindow() && sb.isShown() && sb.getGlobalVisibleRect(TMP);
     }
 
     // ------------------------------------------------------------ 生命周期
@@ -478,16 +397,13 @@ final class TimeHook {
     }
 
     private static void removeView() {
-        MAIN.removeCallbacks(WATCHDOG);
-        MAIN.removeCallbacks(PAUSE_CHECK);
-        watching = shown = false;
+        shown = false;
         detach(viewRef.get());
     }
 
-    /** 位置浮窗关闭后：没开常显就把文字撤掉，开着的话重新交给看门狗。 */
+    /** 位置浮窗关闭后：没开常显就把文字撤掉。 */
     static void onPanelClosed() {
         if (!DanmakuHook.cfg.timeAlways) removeView();
-        else armWatchdog();
     }
 
     /** 回到前台（配置刚重读过）：需要时弹出位置浮窗；换了页面的文字拿掉重建；位置有变立即生效。 */
