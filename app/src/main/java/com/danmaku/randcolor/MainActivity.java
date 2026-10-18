@@ -10,8 +10,11 @@ import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
@@ -31,8 +34,12 @@ public class MainActivity extends Activity {
     private int cBg, cCard, cStroke, cText, cSub, cPrimary, cPrimarySoft, cField;
 
     private EditText etPkg;
-    private Switch swEnabled, swLikeBtn, swDtap;
-    private LinearLayout segMode, segKey, statusCard;
+    private Switch swEnabled, swLikeBtn, swDtap, swTime;
+    private LinearLayout segMode, segKey, segStep, statusCard;
+    private TextView tvOffset;
+    private int tDx, tDy;
+    private static final int[] STEPS = {2, 10, 40};
+    private final Handler ui = new Handler(Looper.getMainLooper());
     private TextView tvStatus, btnPush;
     private ScrollView scroll;
 
@@ -62,7 +69,7 @@ public class MainActivity extends Activity {
         TextView title = tv("弹幕随机色", 30, cText, true);
         title.setPadding(dp(4), 0, 0, 0);
         root.addView(title);
-        TextView sub = tv("抖音弹幕随机颜色 · 点赞改为打开评论", 14, cSub, false);
+        TextView sub = tv("弹幕随机颜色 · 点赞改为打开评论 · 视频时长常显", 14, cSub, false);
         sub.setPadding(dp(4), dp(2), 0, dp(14));
         root.addView(sub);
 
@@ -122,6 +129,22 @@ public class MainActivity extends Activity {
         like.addView(ld);
         root.addView(like, cardLp());
 
+        // ---- 视频时长常显
+        root.addView(section("视频时长常显"));
+        LinearLayout tm = card();
+        swTime = new Switch(this);
+        tm.addView(switchRow("视频时长一直显示", "沿用抖音拖动进度条时的时间文字（形如 00:12 / 03:45），播放时一直显示，不用碰进度条", swTime));
+        tm.addView(divider());
+        tm.addView(tv("位置微调", 17, cText, true));
+        TextView td = tv("以抖音原来的位置为起点移动（右、下为正，单位 dp）。点箭头走一格，长按连续移动；改完点下方「保存并应用」。", 13, cSub, false);
+        td.setPadding(0, dp(2), 0, dp(10));
+        tm.addView(td);
+        segStep = segmented("细（2）", "中（10）", "粗（40）");
+        setSeg(segStep, 1);
+        tm.addView(segStep);
+        tm.addView(dpad());
+        root.addView(tm, cardLp());
+
         // ---- 状态（有内容才显示）
         statusCard = new LinearLayout(this);
         statusCard.setOrientation(LinearLayout.VERTICAL);
@@ -145,6 +168,10 @@ public class MainActivity extends Activity {
         swEnabled.setChecked(c.enabled);
         swLikeBtn.setChecked(c.likeBtnToComment);
         swDtap.setChecked(c.dtapToComment);
+        swTime.setChecked(c.timeAlways);
+        tDx = c.timeDx;
+        tDy = c.timeDy;
+        showOffset();
         setSeg(segMode, c.mode == 1 ? 1 : 0);
         setSeg(segKey, c.keyByText ? 1 : 0);
     }
@@ -156,6 +183,9 @@ public class MainActivity extends Activity {
         c.keyByText = segIndex(segKey) == 1;
         c.likeBtnToComment = swLikeBtn.isChecked();
         c.dtapToComment = swDtap.isChecked();
+        c.timeAlways = swTime.isChecked();
+        c.timeDx = tDx;
+        c.timeDy = tDy;
         return c;
     }
 
@@ -189,6 +219,101 @@ public class MainActivity extends Activity {
                 showStatus(sb.toString(), sb.indexOf("✗") >= 0 ? 2 : 1);
             });
         }).start();
+    }
+
+    @Override
+    protected void onDestroy() {
+        ui.removeCallbacksAndMessages(null);
+        super.onDestroy();
+    }
+
+    // ------------------------------------------------------------ 方向键
+
+    private View dpad() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER_HORIZONTAL);
+        box.setPadding(0, dp(14), 0, 0);
+        box.addView(padRow(null, arrow("▲", 0, -1), null));
+        tvOffset = tv("", 13, cSub, false);
+        tvOffset.setGravity(Gravity.CENTER);
+        tvOffset.setTypeface(Typeface.MONOSPACE);
+        box.addView(padRow(arrow("◀", -1, 0), tvOffset, arrow("▶", 1, 0)));
+        box.addView(padRow(null, arrow("▼", 0, 1), null));
+        TextView reset = pillButton("归零", false);
+        reset.setTextSize(15);
+        reset.setOnClickListener(v -> {
+            tDx = 0;
+            tDy = 0;
+            showOffset();
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(120), dp(44));
+        lp.topMargin = dp(12);
+        box.addView(reset, lp);
+        return box;
+    }
+
+    private LinearLayout padRow(View l, View m, View r) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER);
+        View[] vs = {l, m, r};
+        for (View v : vs) {
+            if (v == null) v = new View(this);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(92), dp(56));
+            lp.setMargins(dp(3), dp(3), dp(3), dp(3));
+            row.addView(v, lp);
+        }
+        return row;
+    }
+
+    /** 方向键：按下走一格，按住 350ms 后每 70ms 再走一格，松手 / 取消就停。 */
+    private TextView arrow(String label, final int sx, final int sy) {
+        TextView t = tv(label, 22, cText, true);
+        t.setGravity(Gravity.CENTER);
+        t.setBackground(ripple(round(cField, 0, 16)));
+        final Runnable[] rep = new Runnable[1];
+        rep[0] = () -> {
+            nudge(sx, sy);
+            ui.postDelayed(rep[0], 70);
+        };
+        t.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(true);
+                    v.setPressed(true);
+                    nudge(sx, sy);
+                    ui.postDelayed(rep[0], 350);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    v.setPressed(false);
+                    ui.removeCallbacks(rep[0]);
+                    return true;
+                default:
+                    return true;
+            }
+        });
+        return t;
+    }
+
+    private void nudge(int sx, int sy) {
+        int step = STEPS[Math.max(0, Math.min(STEPS.length - 1, segIndex(segStep)))];
+        tDx = clampOffset(tDx + sx * step);
+        tDy = clampOffset(tDy + sy * step);
+        showOffset();
+    }
+
+    private static int clampOffset(int v) {
+        return Math.max(-2000, Math.min(2000, v));
+    }
+
+    private void showOffset() {
+        if (tvOffset != null) tvOffset.setText("水平 " + signed(tDx) + "\n垂直 " + signed(tDy));
+    }
+
+    private static String signed(int v) {
+        return v > 0 ? "+" + v : String.valueOf(v);
     }
 
     // ------------------------------------------------------------ 状态卡片 / 忙碌态
