@@ -12,12 +12,10 @@ import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
 
 /**
  * 视频时长常显：自己画一个 "00:12 / 03:45"，不用抖音的时间控件。
@@ -49,7 +47,9 @@ final class TimeHook {
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper()); // 只用来把非主线程的事件转回主线程
 
-    private static volatile boolean progressHooked, eventsHooked, stopHooked, releaseHooked, playingHooked;
+    private static final XC_MethodHook PROGRESS_HOOK = new ProgressHook();
+    private static final XC_MethodHook STOP_HOOK = new StopHook();
+    private static final XC_MethodHook PLAYING_HOOK = new PlayingHook();
 
     private static WeakReference<TextView> viewRef = new WeakReference<>(null);
 
@@ -62,49 +62,22 @@ final class TimeHook {
 
     // ------------------------------------------------------------ 安装
 
-    static boolean allHooked() {
-        return progressHooked && eventsHooked;
-    }
-
-    /** 目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到都挂上。 */
+    /**
+     * 目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到每个钩子都有结论（挂上 / 放弃 / 不再重试，见 HookGuard）。
+     * 名字都是没混淆的（OnUIPlayListenerDelegate 的四个回调），类在但方法对不上就是抖音改了，立刻放弃并记住。
+     */
     static void tryHook(ClassLoader cl) {
-        if (cl == null || allHooked()) return;
-        attempt(cl);
-        if (!progressHooked) {
-            ClassLoader ctx = Thread.currentThread().getContextClassLoader();
-            if (ctx != null && ctx != cl) attempt(ctx);
-        }
+        if (cl == null) return;
+        ClassLoader ctx = Thread.currentThread().getContextClassLoader();
+        hook(HookGuard.TIME_PROGRESS, PROGRESS, PROGRESS_HOOK, cl, ctx);
+        hook(HookGuard.TIME_STOP, "onPlayStop", STOP_HOOK, cl, ctx);
+        hook(HookGuard.TIME_RELEASE, "onPlayRelease", STOP_HOOK, cl, ctx);
+        hook(HookGuard.TIME_PLAYING, "onPlaying", PLAYING_HOOK, cl, ctx);
     }
 
-    private static void attempt(ClassLoader cl) {
-        if (!progressHooked) progressHooked = hookAll(cl, DELEGATE, PROGRESS, new ProgressHook());
-        if (progressHooked && !eventsHooked) eventsHooked = hookEvents(cl);
-    }
-
-    private static boolean hookAll(ClassLoader cl, String cls, String method, XC_MethodHook cb) {
-        try {
-            Class<?> c = Class.forName(cls, false, cl);
-            Set<XC_MethodHook.Unhook> s = XposedBridge.hookAllMethods(c, method, cb);
-            if (s == null || s.isEmpty()) {
-                XposedBridge.log("[DanmakuColor] time hook: no method " + cls + "#" + method);
-                return false;
-            }
-            return true;
-        } catch (ClassNotFoundException e) {
-            return false; // 还没加载：下次回到前台再试
-        } catch (Throwable t) {
-            XposedBridge.log("[DanmakuColor] time hook failed: " + cls + "#" + method + " " + t);
-            return false;
-        }
-    }
-
-    /** 状态回调：名字已由 TextRec 追踪确认，不再扫描。 */
-    private static boolean hookEvents(ClassLoader cl) {
-        XC_MethodHook stop = new StopHook();
-        if (!stopHooked) stopHooked = hookAll(cl, DELEGATE, "onPlayStop", stop);
-        if (!releaseHooked) releaseHooked = hookAll(cl, DELEGATE, "onPlayRelease", stop);
-        if (!playingHooked) playingHooked = hookAll(cl, DELEGATE, "onPlaying", new PlayingHook());
-        return stopHooked && releaseHooked && playingHooked; // 分开记，重试时不会把已经挂上的再挂一遍
+    private static void hook(int id, String method, XC_MethodHook h, ClassLoader cl, ClassLoader ctx) {
+        HookGuard.hook(id, DELEGATE, HookGuard.named(method), h,
+                "OnUIPlayListenerDelegate 里没有 " + method + "（播放器监听接口变了，需要重新追踪）", cl, ctx);
     }
 
     private static boolean isMain() {
