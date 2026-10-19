@@ -19,11 +19,6 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * 第 1 次 drawStyle=Stroke（黑色描边），第 2 次 drawStyle=Fill（白色填充）。
  * 这里在"Stroke 之后紧跟的那次 Fill"里把 color 参数换成随机色。描边保持不变。
  *
- * 颜色按弹幕"文字内容"定：同一段文字永远同一个颜色。以前按 MultiParagraph 对象的 identityHashCode 定，
- * 抖音重新测量（TextMeasurer.measure）会换一个新对象，颜色就跟着变，弹幕会闪几下。
- * 读文字：MultiParagraph.intrinsics 这个字段名没被混淆，往下找第一个 CharSequence 字段（AnnotatedString 也是），
- * 不写死混淆名；读不到时退回对象身份，和旧行为一致。反射只在缓存没命中时做一次。
- *
  * 省电要点：没有任何轮询 / 日志 / 文件写入；配置只在 Activity.onResume 时读一次（文件没变就不重读）；
  * paint 热路径里不分配对象、不做字符串比较（Class 对象缓存后按引用比较）。
  */
@@ -34,7 +29,6 @@ final class DanmakuHook {
 
     static volatile DanmakuConfig cfg = new DanmakuConfig();
     private static volatile long cfgMtime = -1;
-    private static volatile boolean installed, givenUp;
     private static File cfgFile;
 
     /**
@@ -53,6 +47,7 @@ final class DanmakuHook {
 
     static void init(XC_LoadPackage.LoadPackageParam lp) {
         cfgFile = new File(new File(lp.appInfo.dataDir, "files"), "danmaku_color.properties");
+        HookGuard.init(lp);
         reload();
         tryInstall(lp.classLoader);
         CommentHook.tryHook(lp.classLoader);
@@ -100,8 +95,9 @@ final class DanmakuHook {
                         Activity a = (Activity) p.thisObject;
                         CommentHook.top = new WeakReference<>(a);
                         TimeHook.onResume(a);
-                        // 全部挂上（或确认挂不上）之后，回到前台不再扫描类、不再挂钩
-                        if ((installed || givenUp) && CommentHook.allHooked() && TimeHook.allHooked()) return;
+                        HookGuard.noteVersion(a);
+                        // 每个钩子都有结论（挂上 / 放弃 / 不再重试）之后，回到前台不再扫描类、不再挂钩
+                        if (HookGuard.allSettled()) return;
                         ClassLoader cl = a.getClass().getClassLoader();
                         CommentHook.tryHook(cl);
                         TimeHook.tryHook(cl);
@@ -117,35 +113,58 @@ final class DanmakuHook {
 
     // ------------------------------------------------------------ 安装 Hook
 
+    /**
+     * 先严格匹配（TextRec 追踪确认的签名），没有再放宽；都没有就放弃并记住（见 HookGuard）。
+     *  严格：paint(Canvas, long 颜色, Shadow, TextDecoration, DrawStyle, int)
+     *  放宽：第一个参数是 Canvas，恰好一个 long（颜色），有一个 DrawStyle 参数——位置按类型找，不依赖参数个数和顺序。
+     */
     static synchronized void tryInstall(ClassLoader cl) {
-        if (installed || givenUp || cl == null) return;
+        if (cl == null || HookGuard.settled(HookGuard.PAINT)) return;
+        Class<?> mp = HookGuard.find(HookGuard.PAINT, MP, cl);
+        if (mp == null) return;
+        int n;
+        boolean relaxed = false;
         try {
-            Class<?> mp;
-            try {
-                mp = Class.forName(MP, false, cl);
-            } catch (Throwable t) {
-                return; // 还没加载：下次回到前台再试
+            n = hookPaint(mp, true);
+            if (n == 0) {
+                n = hookPaint(mp, false);
+                relaxed = n > 0;
             }
-            int n = 0;
-            for (Method m : mp.getDeclaredMethods()) {
-                String name = m.getName();
-                if (!name.startsWith("paint") || name.contains("$")) continue;
-                Class<?>[] pt = m.getParameterTypes();
-                // 按签名匹配而不是写死方法名后缀（Compose 版本变了后缀会变）
-                if (pt.length == 6 && pt[1] == long.class
-                        && pt[2].getName().endsWith("Shadow") && pt[4].getName().endsWith("DrawStyle")) {
-                    try {
-                        XposedBridge.hookMethod(m, new PaintHook());
-                        n++;
-                    } catch (Throwable ignored) {
-                    }
-                }
-            }
-            if (n > 0) installed = true;
-            else givenUp = true; // Compose 接口变了：不再反复扫描
-        } catch (Throwable ignored) {
-            givenUp = true;
+        } catch (Throwable t) { // 方法签名里引用的类还没就绪
+            HookGuard.waitFail(HookGuard.PAINT);
+            return;
         }
+        if (n > 0) HookGuard.ok(HookGuard.PAINT, relaxed ? "宽松匹配" : "");
+        else HookGuard.miss(HookGuard.PAINT, "MultiParagraph 里没有 paint(Canvas, 颜色, …, DrawStyle, …) 这样的方法（Compose 接口变了）");
+    }
+
+    private static int hookPaint(Class<?> mp, boolean strict) {
+        int n = 0;
+        for (Method m : mp.getDeclaredMethods()) {
+            String name = m.getName();
+            if (!name.startsWith("paint") || name.contains("$")) continue;
+            Class<?>[] pt = m.getParameterTypes();
+            int colorIdx = -1, styleIdx = -1, longs = 0;
+            for (int i = 0; i < pt.length; i++) {
+                if (pt[i] == long.class) {
+                    longs++;
+                    colorIdx = i;
+                }
+                if (pt[i].getName().endsWith("DrawStyle")) styleIdx = i;
+            }
+            if (longs != 1 || styleIdx < 0) continue; // 带 Brush 的那个重载没有 long 颜色，在这里被排除
+            if (strict) {
+                if (!(pt.length == 6 && colorIdx == 1 && styleIdx == 4 && pt[2].getName().endsWith("Shadow"))) continue;
+            } else if (pt.length == 0 || !pt[0].getName().endsWith("Canvas")) {
+                continue;
+            }
+            try {
+                XposedBridge.hookMethod(m, new PaintHook(colorIdx, styleIdx));
+                n++;
+            } catch (Throwable ignored) {
+            }
+        }
+        return n;
     }
 
     // ------------------------------------------------------------ 核心
@@ -169,13 +188,20 @@ final class DanmakuHook {
     }
 
     private static final class PaintHook extends XC_MethodHook {
+        private final int colorIdx, styleIdx; // 颜色（long）和 DrawStyle 在参数里的位置：按类型找到的
+
+        PaintHook(int colorIdx, int styleIdx) {
+            this.colorIdx = colorIdx;
+            this.styleIdx = styleIdx;
+        }
+
         @Override
         protected void beforeHookedMethod(MethodHookParam p) {
             try {
                 DanmakuConfig c = cfg;
                 if (!c.enabled) return;
                 Object[] a = p.args;
-                int kind = kindOf(a[4]);
+                int kind = kindOf(a[styleIdx]);
                 if (kind == 1) { // 弹幕先画描边
                     pendingFill = true;
                     return;
@@ -184,19 +210,20 @@ final class DanmakuHook {
                 pendingFill = false; // 任何一次非 Stroke 调用都会清掉标记，不会误伤别的文字
                 if (!pend || kind != 2) return;
 
-                long v = (Long) a[1];
+                long v = (Long) a[colorIdx];
                 if ((v & 0x3FL) != 0L) return; // 只处理 sRGB；Unspecified/其他色彩空间不碰
 
                 int rgb = colorOf(System.identityHashCode(p.thisObject), p.thisObject, c.mode);
                 int alpha = (int) ((v >>> 56) & 0xFF);           // 保留原透明度
                 int argb = (alpha << 24) | rgb;
-                a[1] = (((long) argb) & 0xFFFFFFFFL) << 32;      // Compose 的 sRGB Color：ARGB 放在高 32 位
+                a[colorIdx] = (((long) argb) & 0xFFFFFFFFL) << 32; // Compose 的 sRGB Color：ARGB 放在高 32 位
             } catch (Throwable ignored) {
             }
         }
     }
 
-    /** key = 对象身份，只用来当缓存键；真正决定颜色的是文字（读不到才用身份）。 */
+    /** key = 对象身份，只用来当缓存键；真正决定颜色的是文字（读不到才用身份）。
+     *  以前按对象身份定色，抖音重新测量会换新对象，颜色就跟着变，弹幕会闪几下。 */
     private static int colorOf(int key, Object mp, int mode) {
         int slot = (key ^ (key >>> 8)) & 255;
         long e = CACHE[slot];
