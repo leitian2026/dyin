@@ -4,8 +4,6 @@ import android.app.Activity;
 import android.content.res.ColorStateList;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
-import android.os.Handler;
-import android.os.Looper;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -21,28 +19,20 @@ import java.lang.ref.WeakReference;
 /**
  * 位置浮窗：画在抖音当前界面的最上层，用来调时长文字的位置，改动实时可见。
  *  - 两条滑动条（水平 / 垂直），左端是减、右端是加；范围是半个屏幕，0 在正中。
- *  - 两端的 − / + 每点一下移动 2 像素，按住连续移动。
+ *  - 两端的 − / + 每点一下移动 2 像素。
  *  - 标题栏可以拖动，浮窗挡住文字时把它拖开。
- *  - 数值改动 0.4 秒后自动写回配置文件；点「完成」立即写回并关闭。
+ *  - 松手（滑动条 / 按钮）时写回配置文件；点「完成」写回并关闭。
  * 由模块设置页的「打开浮窗调整位置」触发（推送 timeAdjust=true 后启动抖音）。
  */
 final class TimePanel {
     private TimePanel() {}
 
     private static final int STEP_PX = 2;
-    private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
     private static WeakReference<View> panelRef = new WeakReference<>(null);
     private static boolean open;
     private static float dragX, dragY; // 浮窗自己被拖到的位置，换界面重建时保留
     private static Axis axX, axY;
-
-    private static final Runnable SAVE = new Runnable() {
-        @Override
-        public void run() {
-            DanmakuHook.saveCfg();
-        }
-    };
 
     static boolean isOpen() {
         return open;
@@ -76,7 +66,6 @@ final class TimePanel {
     }
 
     static void close() {
-        MAIN.removeCallbacks(SAVE);
         DanmakuHook.saveCfg();
         open = false;
         View p = panelRef.get();
@@ -184,6 +173,7 @@ final class TimePanel {
 
             @Override
             public void onStopTrackingTouch(SeekBar s) {
+                DanmakuHook.saveCfg(); // 松手才落盘
             }
         });
         ax.sb = sb;
@@ -194,28 +184,24 @@ final class TimePanel {
         return col;
     }
 
-    /** − / + 按钮：按下走 2 像素，按住 400ms 后每 50ms 再走 2 像素，松手停。 */
+    /** − / + 按钮：每点一下走 2 像素，松手落盘。没有定时器 / 长按连发，大幅度的移动用滑动条。 */
     private static TextView stepBtn(Activity a, String label, final Axis ax, final int dir) {
         TextView t = txt(a, label, 22, 0xFFFFFFFF, true);
         t.setGravity(Gravity.CENTER);
         t.setBackground(round(0x33FFFFFF, dp(a, 12)));
-        final Runnable[] rep = new Runnable[1];
-        rep[0] = () -> {
-            ax.set(ax.get() + dir * STEP_PX, false);
-            MAIN.postDelayed(rep[0], 50);
-        };
         t.setOnTouchListener((v, e) -> {
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(true);
                     v.setPressed(true);
                     ax.set(ax.get() + dir * STEP_PX, false);
-                    MAIN.postDelayed(rep[0], 400);
                     return true;
                 case MotionEvent.ACTION_UP:
+                    DanmakuHook.saveCfg();
+                    v.setPressed(false);
+                    return true;
                 case MotionEvent.ACTION_CANCEL:
                     v.setPressed(false);
-                    MAIN.removeCallbacks(rep[0]);
                     return true;
                 default:
                     return true;
@@ -224,7 +210,7 @@ final class TimePanel {
         return t;
     }
 
-    /** 一个方向的数值：读写配置、同步滑动条和数字、实时移动文字、延迟落盘。 */
+    /** 一个方向的数值：读写配置、同步滑动条和数字、实时移动文字（落盘由调用方在松手时做）。 */
     private static final class Axis {
         final boolean horiz;
         final int range;
@@ -249,8 +235,6 @@ final class TimePanel {
             if (!fromSlider && sb != null) sb.setProgress(v + range); // fromUser=false，不会回调到 set
             refresh();
             TimeHook.applyOffsetNow();
-            MAIN.removeCallbacks(SAVE);
-            MAIN.postDelayed(SAVE, 400);
         }
 
         void refresh() {
