@@ -31,13 +31,18 @@ final class DanmakuHook {
     private static volatile boolean installed, givenUp;
     private static File cfgFile;
 
-    /** 同一线程上：上一次 paint 是不是 Stroke（说明下一次 Fill 就是弹幕的填充）。 */
-    private static final ThreadLocal<boolean[]> PENDING = new ThreadLocal<boolean[]>() {
-        @Override
-        protected boolean[] initialValue() {
-            return new boolean[1];
-        }
-    };
+    /**
+     * 上一次 paint 是不是 Stroke（说明下一次 Fill 就是弹幕的填充）。
+     * 不用 ThreadLocal：Compose 的文字绘制都在主线程，普通静态变量每次少一次查表。
+     */
+    private static boolean pendingFill;
+
+    /**
+     * 颜色缓存（直接映射，256 项）：键 = 弹幕对象的 identityHashCode，值 = 算好的颜色。
+     * 一个 long：高 32 位是键，低 32 位是 0x01000000 | (mode << 25) | RGB（0 表示空）。
+     * 弹幕滚动时每帧重绘同一条，命中缓存就不用再做哈希混合和 HSV→RGB。
+     */
+    private static final long[] CACHE = new long[256];
     private static volatile Class<?> strokeCls, fillCls;
 
     static void init(XC_LoadPackage.LoadPackageParam lp) {
@@ -165,25 +170,34 @@ final class DanmakuHook {
                 if (!c.enabled) return;
                 Object[] a = p.args;
                 int kind = kindOf(a[4]);
-                boolean[] st = PENDING.get();
                 if (kind == 1) { // 弹幕先画描边
-                    st[0] = true;
+                    pendingFill = true;
                     return;
                 }
-                boolean pend = st[0];
-                st[0] = false; // 任何一次非 Stroke 调用都会清掉标记，不会误伤别的文字
+                boolean pend = pendingFill;
+                pendingFill = false; // 任何一次非 Stroke 调用都会清掉标记，不会误伤别的文字
                 if (!pend || kind != 2) return;
 
                 long v = (Long) a[1];
                 if ((v & 0x3FL) != 0L) return; // 只处理 sRGB；Unspecified/其他色彩空间不碰
 
-                int rgb = pick(System.identityHashCode(p.thisObject), c.mode);
+                int rgb = colorOf(System.identityHashCode(p.thisObject), c.mode);
                 int alpha = (int) ((v >>> 56) & 0xFF);           // 保留原透明度
                 int argb = (alpha << 24) | rgb;
                 a[1] = (((long) argb) & 0xFFFFFFFFL) << 32;      // Compose 的 sRGB Color：ARGB 放在高 32 位
             } catch (Throwable ignored) {
             }
         }
+    }
+
+    private static int colorOf(int key, int mode) {
+        int slot = (key ^ (key >>> 8)) & 255;
+        long e = CACHE[slot];
+        int tag = 0x01000000 | (mode << 25);
+        if ((int) (e >>> 32) == key && ((int) e & 0xFF000000) == tag) return (int) e & 0xFFFFFF;
+        int rgb = pick(key, mode);
+        CACHE[slot] = ((long) key << 32) | (tag | rgb) & 0xFFFFFFFFL;
+        return rgb;
     }
 
     private static int mix(int x) {
