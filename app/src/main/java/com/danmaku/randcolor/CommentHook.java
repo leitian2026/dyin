@@ -43,73 +43,67 @@ final class CommentHook {
     private static volatile boolean clickHooked, dtapHooked;
     private static volatile long lastOpenAt;
 
-    /** 需要目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到挂上。 */
-    static void tryHook(ClassLoader cl) {
-        if (cl == null) return;
-        hookDtap(cl);
-        hookDiggClick(cl);
+    static boolean allHooked() {
+        return clickHooked && dtapHooked;
     }
 
-    /** 2) 双击：跳过抖音的双击处理（红心和点赞都在它下面），改为打开评论。 */
-    private static void hookDtap(ClassLoader cl) {
-        if (dtapHooked) return;
+    /** 需要目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到挂上。 */
+    static void tryHook(ClassLoader cl) {
+        if (cl == null || allHooked()) return;
+        if (!dtapHooked) dtapHooked = hook(cl, PANEL, PANEL_DTAP_METHOD, true, new DtapHook());
+        if (!clickHooked) clickHooked = hook(cl, DIGG, DIGG_CLICK_METHOD, false, new DiggHook());
+    }
+
+    /**
+     * 按类名 + 方法名挂钩。返回 true 表示不用再试（挂上了，或不是“类还没加载”的原因）；
+     * 类还没加载返回 false，下次回到前台再试。motionOnly：只挂参数是单个 MotionEvent 的重载。
+     */
+    private static boolean hook(ClassLoader cl, String cls, String name, boolean motionOnly, XC_MethodHook h) {
         try {
-            Class<?> k = Class.forName(PANEL, false, cl);
             int n = 0;
-            for (Method m : k.getDeclaredMethods()) {
-                if (!m.getName().equals(PANEL_DTAP_METHOD)) continue;
-                Class<?>[] pt = m.getParameterTypes();
-                if (pt.length != 1 || pt[0] != MotionEvent.class) continue;
-                XposedBridge.hookMethod(m, new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam p) {
-                        try {
-                            if (!DanmakuHook.cfg.dtapToComment) return;
-                            long now = SystemClock.uptimeMillis();
-                            if (now - lastOpenAt >= REOPEN_GAP_MS) {
-                                lastOpenAt = now;
-                                openComments(); // 找不到评论按钮也不放行：双击不点赞
-                            }
-                            p.setResult(defaultOf(((Method) p.method).getReturnType()));
-                        } catch (Throwable ignored) {
-                        }
-                    }
-                });
+            for (Method m : Class.forName(cls, false, cl).getDeclaredMethods()) {
+                if (!m.getName().equals(name)) continue;
+                if (motionOnly) {
+                    Class<?>[] pt = m.getParameterTypes();
+                    if (pt.length != 1 || pt[0] != MotionEvent.class) continue;
+                }
+                XposedBridge.hookMethod(m, h);
                 n++;
             }
-            dtapHooked = n > 0;
+            return n > 0 || !motionOnly; // 双击入口一个都没找到 = 签名不对，继续等；爱心按钮沿用旧行为
         } catch (ClassNotFoundException e) {
-            // 类还没加载：下次回到前台再试
+            return false;
         } catch (Throwable t) {
-            dtapHooked = true;
+            return true;
         }
     }
 
-    /** 1) 右侧爱心按钮。 */
-    private static void hookDiggClick(ClassLoader cl) {
-        if (clickHooked) return;
-        try {
-            Class<?> k = Class.forName(DIGG, false, cl);
-            for (Method m : k.getDeclaredMethods()) {
-                if (!m.getName().equals(DIGG_CLICK_METHOD)) continue;
-                XposedBridge.hookMethod(m, new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam p) {
-                        try {
-                            if (!DanmakuHook.cfg.likeBtnToComment) return;
-                            // 只拦"用户点出来的"：这个方法在切视频 / 绑定数据 / 收到服务器结果时也可能被调用。栈里没有点击或触摸事件的一律放行。
-                            if (!fromUserInput()) return;
-                            if (openComments()) p.setResult(defaultOf(((Method) p.method).getReturnType()));
-                        } catch (Throwable ignored) {
-                        }
-                    }
-                });
+    /** 双击：跳过抖音的双击处理（红心和点赞都在它下面），改为打开评论。找不到评论按钮也不放行：双击不点赞。 */
+    private static final class DtapHook extends XC_MethodHook {
+        @Override
+        protected void beforeHookedMethod(MethodHookParam p) {
+            try {
+                if (!DanmakuHook.cfg.dtapToComment) return;
+                long now = SystemClock.uptimeMillis();
+                if (now - lastOpenAt >= REOPEN_GAP_MS) {
+                    lastOpenAt = now;
+                    openComments();
+                }
+                p.setResult(defaultOf(((Method) p.method).getReturnType()));
+            } catch (Throwable ignored) {
             }
-            clickHooked = true;
-        } catch (ClassNotFoundException e) {
-            // 类还没加载或这个版本没有：下次回到前台再试
-        } catch (Throwable t) {
-            clickHooked = true;
+        }
+    }
+
+    /** 右侧爱心按钮：只拦“用户点出来的”（切视频 / 绑定数据 / 服务器结果也会调到这个方法）。找不到评论按钮时放行点赞。 */
+    private static final class DiggHook extends XC_MethodHook {
+        @Override
+        protected void beforeHookedMethod(MethodHookParam p) {
+            try {
+                if (!DanmakuHook.cfg.likeBtnToComment || !fromUserInput()) return;
+                if (openComments()) p.setResult(defaultOf(((Method) p.method).getReturnType()));
+            } catch (Throwable ignored) {
+            }
         }
     }
 
