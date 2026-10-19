@@ -14,8 +14,6 @@ public final class DanmakuConfig {
     public boolean enabled = true;
     /** 0 = 鲜艳（高饱和高亮度）  1 = 任意（含浅色/粉彩） */
     public int mode = 0;
-    /** false = 每个文字对象固定一个颜色；true = 相同文字固定同一个颜色 */
-    public boolean keyByText = false;
     /** 点右侧爱心按钮时，不点赞，改为打开评论。 */
     public boolean likeBtnToComment = false;
     /** 双击视频时，不点赞、不出红心，改为打开评论。 */
@@ -32,7 +30,6 @@ public final class DanmakuConfig {
             Properties p = new Properties();
             p.setProperty("enabled", String.valueOf(enabled));
             p.setProperty("mode", String.valueOf(mode));
-            p.setProperty("keyByText", String.valueOf(keyByText));
             p.setProperty("likeBtnToComment", String.valueOf(likeBtnToComment));
             p.setProperty("dtapToComment", String.valueOf(dtapToComment));
             p.setProperty("timeAlways", String.valueOf(timeAlways));
@@ -72,7 +69,6 @@ public final class DanmakuConfig {
 
     private static void fill(DanmakuConfig c, Properties p) {
         c.enabled = Boolean.parseBoolean(p.getProperty("enabled", "true").trim());
-        c.keyByText = Boolean.parseBoolean(p.getProperty("keyByText", "false").trim());
         c.likeBtnToComment = Boolean.parseBoolean(p.getProperty("likeBtnToComment", "false").trim());
         c.dtapToComment = Boolean.parseBoolean(p.getProperty("dtapToComment", "false").trim());
         c.timeAlways = Boolean.parseBoolean(p.getProperty("timeAlways", "false").trim());
