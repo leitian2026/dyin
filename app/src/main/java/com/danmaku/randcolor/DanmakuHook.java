@@ -52,6 +52,7 @@ final class DanmakuHook {
         tryInstall(lp.classLoader);
         CommentHook.tryHook(lp.classLoader);
         TimeHook.tryHook(lp.classLoader);
+        TabHook.tryHook(lp.classLoader);
         IdleExit.install();
         hookResume();
     }
@@ -103,6 +104,7 @@ final class DanmakuHook {
                         ClassLoader cl = a.getClass().getClassLoader();
                         CommentHook.tryHook(cl);
                         TimeHook.tryHook(cl);
+                        TabHook.tryHook(cl);
                         tryInstall(cl); // Compose 类可能晚于进程启动才可用
                     } catch (Throwable ignored) {
                     }
