@@ -21,7 +21,10 @@ import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Properties;
 
 /** 设置页：卡片 + 开关行 + 分段按钮 + 底部固定操作栏。纯框架控件，不依赖任何第三方库；跟随系统深浅色。 */
 public class MainActivity extends Activity {
@@ -36,7 +39,7 @@ public class MainActivity extends Activity {
     private LinearLayout segMode, statusCard;
     private TextView tvOffset;
     private int tX, tY;
-    private TextView tvStatus, btnPush, btnAdjust;
+    private TextView tvStatus, btnPush, btnAdjust, btnHooks;
     private ScrollView scroll;
 
     @Override
@@ -151,6 +154,18 @@ public class MainActivity extends Activity {
         btns.addView(reset, rl);
         tm.addView(btns);
         root.addView(tm, cardLp());
+
+        // ---- 钩子状态
+        root.addView(section("钩子状态"));
+        LinearLayout hk = card();
+        TextView hd = tv("抖音更新后，模块会自己按特征重新找钩子，找不到的会放弃并记住（同一个版本不再反复尝试）。点下面的按钮用 root 读取每个钩子是否可用。", 13, cSub, false);
+        hd.setPadding(0, 0, 0, dp(12));
+        hk.addView(hd);
+        btnHooks = pillButton("检查钩子状态", false);
+        btnHooks.setTextSize(16);
+        btnHooks.setOnClickListener(v -> checkHooks());
+        hk.addView(btnHooks, new LinearLayout.LayoutParams(-1, dp(48)));
+        root.addView(hk, cardLp());
 
         // ---- 状态（有内容才显示）
         statusCard = new LinearLayout(this);
@@ -301,6 +316,71 @@ public class MainActivity extends Activity {
                 sp2.edit().putString("cfg", read().toText()).putBoolean("adjusting", false).apply();
             });
         }).start();
+    }
+
+    // ------------------------------------------------------------ 钩子状态
+
+    private static final String[][] HOOK_NAMES = {
+            {"paint", "弹幕随机色"},
+            {"comment.digg", "爱心按钮改评论"},
+            {"comment.dtap", "双击改评论"},
+            {"time.progress", "视频时长：进度"},
+            {"time.stop", "视频时长：停止"},
+            {"time.release", "视频时长：释放"},
+            {"time.playing", "视频时长：开始播放"},
+    };
+
+    /** 用 root 读抖音数据目录里的 hooks.properties（抖音进程自己写的），列出每个钩子的状态。 */
+    private void checkHooks() {
+        final List<String> list = DanmakuConfig.split(etPkg.getText().toString().trim());
+        if (list.isEmpty()) {
+            showStatus("请先填目标包名", 2);
+            return;
+        }
+        final String pkg = list.get(0);
+        setBusy(btnHooks, true, "正在读取…");
+        new Thread(() -> {
+            final String text = RootShell.readFile(pkg, "hooks.properties");
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                setBusy(btnHooks, false, "检查钩子状态");
+                if (text == null) {
+                    showStatus("没读到钩子状态：抖音还没运行过 / 模块没在 LSPosed 里勾选它 / 没 root。先打开抖音用一会儿，再来检查。", 2);
+                    return;
+                }
+                boolean[] bad = new boolean[1];
+                String msg = describeHooks(text, bad);
+                showStatus(msg == null ? "钩子状态文件读不懂" : msg, msg == null || bad[0] ? 2 : 1);
+            });
+        }).start();
+    }
+
+    private static String describeHooks(String text, boolean[] bad) {
+        Properties p = new Properties();
+        try {
+            p.load(new ByteArrayInputStream(text.getBytes(StandardCharsets.ISO_8859_1)));
+        } catch (Exception e) {
+            return null;
+        }
+        String ver = p.getProperty("ver");
+        StringBuilder b = new StringBuilder("抖音 ").append(ver != null ? ver : "（版本未知）").append('\n');
+        for (String[] h : HOOK_NAMES) {
+            String st = p.getProperty(h[0]), note = p.getProperty(h[0] + ".note");
+            boolean hasNote = note != null && !note.isEmpty();
+            if ("ok".equals(st)) {
+                b.append("✓ ").append(h[1]).append(hasNote ? "（" + note + "）" : "");
+            } else if ("gaveup".equals(st)) {
+                bad[0] = true;
+                b.append("✗ ").append(h[1]).append("：未适配").append(hasNote ? " — " + note : "");
+            } else if ("missing".equals(st)) {
+                bad[0] = true;
+                b.append("✗ ").append(h[1]).append("：相关的类一直没找到");
+            } else {
+                b.append("… ").append(h[1]).append("：还没挂上（抖音还没走到相关界面）");
+            }
+            b.append('\n');
+        }
+        return b.toString().trim();
     }
 
     private void showOffset() {
