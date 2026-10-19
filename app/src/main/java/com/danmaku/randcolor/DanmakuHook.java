@@ -52,6 +52,7 @@ final class DanmakuHook {
         tryInstall(lp.classLoader);
         CommentHook.tryHook(lp.classLoader);
         TimeHook.tryHook(lp.classLoader);
+        IdleExit.install();
         hookResume();
     }
 
@@ -95,6 +96,7 @@ final class DanmakuHook {
                         Activity a = (Activity) p.thisObject;
                         CommentHook.top = new WeakReference<>(a);
                         TimeHook.onResume(a);
+                        IdleExit.onResume();
                         HookGuard.noteVersion(a);
                         // 每个钩子都有结论（挂上 / 放弃 / 不再重试）之后，回到前台不再扫描类、不再挂钩
                         if (HookGuard.allSettled()) return;
