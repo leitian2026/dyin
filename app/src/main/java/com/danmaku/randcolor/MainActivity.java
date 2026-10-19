@@ -33,7 +33,7 @@ public class MainActivity extends Activity {
 
     private EditText etPkg;
     private Switch swEnabled, swLikeBtn, swDtap, swTime;
-    private LinearLayout segMode, statusCard;
+    private LinearLayout segMode, segKey, statusCard;
     private TextView tvOffset;
     private int tX, tY;
     private TextView tvStatus, btnPush, btnAdjust;
@@ -103,6 +103,13 @@ public class MainActivity extends Activity {
         colors.addView(d1);
         segMode = segmented("鲜艳", "任意");
         colors.addView(segMode);
+        colors.addView(divider());
+        colors.addView(tv("同一条弹幕怎么固定颜色", 17, cText, true));
+        TextView d2 = tv("弹幕滚动时每帧都在重绘，必须固定，否则会闪。推荐按弹幕对象；如果会闪，换成按文字内容。", 13, cSub, false);
+        d2.setPadding(0, dp(2), 0, dp(10));
+        colors.addView(d2);
+        segKey = segmented("按弹幕对象（推荐）", "按文字内容");
+        colors.addView(segKey);
         root.addView(colors, cardLp());
 
         // ---- 点赞改为打开评论
@@ -180,12 +187,14 @@ public class MainActivity extends Activity {
         tY = c.timeY;
         showOffset();
         setSeg(segMode, c.mode == 1 ? 1 : 0);
+        setSeg(segKey, c.keyByText ? 1 : 0);
     }
 
     private DanmakuConfig read() {
         DanmakuConfig c = new DanmakuConfig();
         c.enabled = swEnabled.isChecked();
         c.mode = segIndex(segMode) == 1 ? 1 : 0;
+        c.keyByText = segIndex(segKey) == 1;
         c.likeBtnToComment = swLikeBtn.isChecked();
         c.dtapToComment = swDtap.isChecked();
         c.timeAlways = swTime.isChecked();
