@@ -34,7 +34,7 @@ public class MainActivity extends Activity {
     private boolean dark;
     private int cBg, cCard, cStroke, cText, cSub, cPrimary, cPrimarySoft, cField;
 
-    private EditText etPkg;
+    private EditText etPkg, etIdle;
     private Switch swEnabled, swLikeBtn, swDtap, swTime;
     private LinearLayout segMode, statusCard;
     private TextView tvOffset;
@@ -155,6 +155,19 @@ public class MainActivity extends Activity {
         tm.addView(btns);
         root.addView(tm, cardLp());
 
+        // ---- 无操作自动退出
+        root.addView(section("无操作自动退出"));
+        LinearLayout idle = card();
+        idle.addView(tv("无操作多少分钟后结束抖音", 17, cText, true));
+        TextView idd = tv("连续这么多分钟没有触摸、按键，也没有回到前台，就结束抖音进程（后台也计时）。回到前台算一次操作，重新开始。填 0 = 关闭。", 13, cSub, false);
+        idd.setPadding(0, dp(2), 0, dp(10));
+        idle.addView(idd);
+        etIdle = field();
+        etIdle.setInputType(InputType.TYPE_CLASS_NUMBER);
+        etIdle.setHint("分钟，0 = 关闭");
+        idle.addView(etIdle);
+        root.addView(idle, cardLp());
+
         // ---- 钩子状态
         root.addView(section("钩子状态"));
         LinearLayout hk = card();
@@ -191,6 +204,7 @@ public class MainActivity extends Activity {
         swLikeBtn.setChecked(c.likeBtnToComment);
         swDtap.setChecked(c.dtapToComment);
         swTime.setChecked(c.timeAlways);
+        etIdle.setText(String.valueOf(c.idleExitMin));
         tX = c.timeX;
         tY = c.timeY;
         showOffset();
@@ -206,6 +220,11 @@ public class MainActivity extends Activity {
         c.timeAlways = swTime.isChecked();
         c.timeX = tX;
         c.timeY = tY;
+        try {
+            c.idleExitMin = Math.max(0, Math.min(1440, Integer.parseInt(etIdle.getText().toString().trim())));
+        } catch (Throwable t) {
+            c.idleExitMin = 0;
+        }
         return c;
     }
 
