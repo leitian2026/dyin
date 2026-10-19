@@ -13,6 +13,12 @@
 1. LSPosed 启用模块，作用域勾选抖音，强杀抖音重开。
 2. 打开模块设置，点「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
+## 1.17.1：代码清理 + 省电（功能不变：弹幕随机色 / 拦截点赞开评论 / 视频时长常显含位置浮窗）
+- 删除弹幕"按文字内容固定颜色"这套备选实现（`keyByText` + 反射读文字），只保留按弹幕对象固定颜色。
+- `CommentHook` 两个入口合并成一个通用 `hook()`，回调各自独立成类。
+- `TimeHook` 去掉诊断日志（`time ok` / `time stop/release ok` / `classes not found yet`）。
+- 省电：所有钩子都挂上之后，`Activity.onResume` 里不再扫描类、不再尝试挂钩，只剩配置文件时间检查和时长文字的换页处理。
+
 ## 1.16.3：时长改挂播放器真实的状态回调（TextRec 1.22.4 追踪确认）
 1.16.2 的关键字扫描已删除，换成追踪到的真实方法名。全部在 `OnUIPlayListenerDelegate`（`com.ss.android.ugc.aweme.video.simplayer.listener.base`，40.7.0 没混淆，第一个参数是视频 id）：
 - **离开视频 → 立刻隐藏**：`onPlayStop` / `onPlayRelease`。划走时 60ms 内依次触发 `onPlayPause → onPausePlay → onPlayStop → onPlayRelease`；用户手动暂停只有 `onPlayPause` / `onPausePlay`，没有 stop / release，所以**暂停时文字保持显示**，不用靠猜。只处理当前视频的事件（旧视频迟到的 stop 不会把新视频的文字藏掉）。
