@@ -130,10 +130,15 @@ final class RootShell {
 
     /** 读回目标 App 数据目录里的配置文本（位置浮窗在抖音里改过数值后，模块用它同步）。读不到返回 null。 */
     static String readConfig(String pkg) {
-        if (!validPkg(pkg)) return null;
+        return readFile(pkg, "danmaku_color.properties");
+    }
+
+    /** 读目标 App 数据目录 files/ 下的一个文本文件（只允许简单文件名）。读不到返回 null。 */
+    static String readFile(String pkg, String name) {
+        if (!validPkg(pkg) || !name.matches("[A-Za-z0-9_.]+")) return null;
         String script = findDirs(pkg)
                 + "for D in $DIRS; do\n"
-                + "F=$D/files/danmaku_color.properties\n"
+                + "F=$D/files/" + name + "\n"
                 + "if [ -f $F ]; then cat $F; echo; echo __OK__; exit 0; fi\n"
                 + "done\n"
                 + "echo __NOFILE__\n";
