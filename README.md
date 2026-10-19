@@ -8,6 +8,8 @@
 
 5. **无操作自动退出**（1.17.8）：连续 N 分钟没有操作抖音（触摸、按键、回到前台都算操作），就结束抖音进程；后台也计时。设置页里填分钟数，0 = 关闭。
 
+6. **首页顶部标签隐藏**（1.17.9）：设置页里列出标签行的 13 个标签，勾选哪个就隐藏哪个。
+
 ## 开发规范
 新增钩子 / 新功能前先读 [`HOOKS.md`](HOOKS.md)（钩子自检的 6 步和硬性规则）；AI 助手的入口是 [`AGENTS.md`](AGENTS.md)。
 
@@ -17,6 +19,12 @@
 ## 使用
 1. LSPosed 启用模块，作用域勾选抖音，强杀抖音重开。
 2. 打开模块设置，点「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
+
+## 1.17.9：首页顶部标签勾选隐藏
+- 设置页新增"首页顶部标签"：推荐 / 关注 / 热点 / 同城 / 商城 / 经验 / 游戏 / 少儿 / 精选 / 团购 / 免费看剧 / 短剧 / 直播，勾选 = 隐藏。13 个标签来自 TextRec 追踪（40.7.0）里标签行每个 `HomeTopTabItemViewNew` 的 contentDescription；那台手机上当前显示的是推荐、关注、热点、同城、商城，其余 8 个在标签行里存在但抖音没有启用。
+- 钩子 `tab.hide`（`TabHook`，已登记到 `HookGuard` / `DanmakuHook.init` / `hookResume` / `MainActivity.HOOK_NAMES`）：找到没混淆的类 `...homepage.tab.top.ui.tabstrip.item.HomeTopTabItemViewNew` 才挂；挂的是框架方法 `View.setContentDescription`，回调里只处理这个类的实例，参数形如"热点，按钮"，取第一个"，"之前的文字去匹配，命中就 `setVisibility(GONE)`。追踪里没有这个 setContentDescription 的设置栈，所以没有更靠近业务的稳定钩子。
+- 为什么不会像 1.11 以前那样耗电：旧版钩的是全局 `TextView.setText` / `View.setVisibility` 并且定时扫 View 树。现在钩的 `setContentDescription` 调用很少；回调先判断有没有勾选（没勾选直接返回），再比较一次类，不分配对象；没有定时器、没有扫描；找不到这个类就根本不挂。
+- 局限：取消勾选后要重启抖音才恢复；只隐藏标签，左右划动仍会翻到被隐藏标签的页面；隐藏后标签行怎么重排取决于抖音的布局；抖音如果在我们设完之后又把它设回可见就会再出现。没有在真机上验证过。
 
 ## 1.17.8：无操作自动退出
 - 新增 `IdleExit`。**记**：钩 `Activity.onUserInteraction`（手指按下 / 按键按下时系统调一次，滑动过程中的移动事件不调）和已有的 `Activity.onResume` 钩子，各把一个时刻 `lastActive`（`elapsedRealtime`）覆盖成"现在"——只覆盖，不比较、不排消息，一秒划几次也只是几次赋值。**判**：回到前台时排**一条** N 分钟后的延时消息；到点醒来才做一次减法 `现在 − lastActive`：不够 N 分钟就按剩余时间再排一条，够了就 `Process.killProcess`。N 分钟里不管操作多少次，消息只在到点时醒一回。没有倒计时，没有每秒的东西。
