@@ -5,6 +5,7 @@ import android.app.Activity;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -17,7 +18,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * 第 1 次 drawStyle=Stroke（黑色描边），第 2 次 drawStyle=Fill（白色填充）。
  * 这里在"Stroke 之后紧跟的那次 Fill"里把 color 参数换成随机色。描边保持不变。
  *
- * 省电要点：没有任何轮询 / 日志 / 文件写入；配置只在 Activity.onResume 时读一次；
+ * 省电要点：没有任何轮询 / 日志 / 文件写入；配置只在 Activity.onResume 时读一次（文件没变就不重读）；
  * paint 热路径里不分配对象、不做字符串比较（Class 对象缓存后按引用比较）。
  */
 final class DanmakuHook {
@@ -29,8 +30,6 @@ final class DanmakuHook {
     private static volatile long cfgMtime = -1;
     private static volatile boolean installed, givenUp;
     private static File cfgFile;
-    private static boolean textInit;
-    private static Method mIntrinsics, mAnnotated, mText;
 
     /** 同一线程上：上一次 paint 是不是 Stroke（说明下一次 Fill 就是弹幕的填充）。 */
     private static final ThreadLocal<boolean[]> PENDING = new ThreadLocal<boolean[]>() {
@@ -77,6 +76,7 @@ final class DanmakuHook {
         }
     }
 
+    /** 每次回到前台：读一次配置（文件没变就跳过）；钩子还没挂全时再试一次。 */
     private static void hookResume() {
         try {
             Method m = Activity.class.getDeclaredMethod("onResume");
@@ -85,15 +85,16 @@ final class DanmakuHook {
                 protected void afterHookedMethod(MethodHookParam p) {
                     try {
                         reload();
-                        if (p.thisObject instanceof Activity) {
-                            Activity a = (Activity) p.thisObject;
-                            CommentHook.top = new java.lang.ref.WeakReference<>(a);
-                            ClassLoader cl = a.getClass().getClassLoader();
-                            CommentHook.tryHook(cl);
-                            TimeHook.tryHook(cl);
-                            TimeHook.onResume(a);
-                            if (!installed) tryInstall(cl); // Compose 类可能晚于进程启动才可用
-                        }
+                        if (!(p.thisObject instanceof Activity)) return;
+                        Activity a = (Activity) p.thisObject;
+                        CommentHook.top = new WeakReference<>(a);
+                        TimeHook.onResume(a);
+                        // 全部挂上（或确认挂不上）之后，回到前台不再扫描类、不再挂钩
+                        if ((installed || givenUp) && CommentHook.allHooked() && TimeHook.allHooked()) return;
+                        ClassLoader cl = a.getClass().getClassLoader();
+                        CommentHook.tryHook(cl);
+                        TimeHook.tryHook(cl);
+                        tryInstall(cl); // Compose 类可能晚于进程启动才可用
                     } catch (Throwable ignored) {
                     }
                 }
@@ -176,42 +177,12 @@ final class DanmakuHook {
                 long v = (Long) a[1];
                 if ((v & 0x3FL) != 0L) return; // 只处理 sRGB；Unspecified/其他色彩空间不碰
 
-                int rgb = pick(keyOf(p.thisObject, c), c.mode);
+                int rgb = pick(System.identityHashCode(p.thisObject), c.mode);
                 int alpha = (int) ((v >>> 56) & 0xFF);           // 保留原透明度
                 int argb = (alpha << 24) | rgb;
                 a[1] = (((long) argb) & 0xFFFFFFFFL) << 32;      // Compose 的 sRGB Color：ARGB 放在高 32 位
             } catch (Throwable ignored) {
             }
-        }
-    }
-
-    private static int keyOf(Object paragraph, DanmakuConfig c) {
-        if (c.keyByText) {
-            String t = textOf(paragraph);
-            if (t != null) return t.hashCode();
-        }
-        return System.identityHashCode(paragraph);
-    }
-
-    /** 读取弹幕文字（用于"相同文字同色"）。字段被混淆读不到时返回 null，退回按对象。 */
-    private static String textOf(Object paragraph) {
-        try {
-            if (!textInit) {
-                textInit = true;
-                try {
-                    mIntrinsics = paragraph.getClass().getMethod("getIntrinsics");
-                    mAnnotated = mIntrinsics.getReturnType().getMethod("getAnnotatedString");
-                    mText = mAnnotated.getReturnType().getMethod("getText");
-                } catch (Throwable t) {
-                    mIntrinsics = null;
-                }
-            }
-            if (mIntrinsics == null) return null;
-            Object intrinsics = mIntrinsics.invoke(paragraph);
-            Object annotated = mAnnotated.invoke(intrinsics);
-            return (String) mText.invoke(annotated);
-        } catch (Throwable t) {
-            return null;
         }
     }
 
