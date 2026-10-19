@@ -6,6 +6,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.lang.ref.WeakReference;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -17,6 +18,11 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  *   MultiParagraph.paint(canvas, color, shadow, decoration, drawStyle, blendMode)
  * 第 1 次 drawStyle=Stroke（黑色描边），第 2 次 drawStyle=Fill（白色填充）。
  * 这里在"Stroke 之后紧跟的那次 Fill"里把 color 参数换成随机色。描边保持不变。
+ *
+ * 颜色按弹幕"文字内容"定：同一段文字永远同一个颜色。以前按 MultiParagraph 对象的 identityHashCode 定，
+ * 抖音重新测量（TextMeasurer.measure）会换一个新对象，颜色就跟着变，弹幕会闪几下。
+ * 读文字：MultiParagraph.intrinsics 这个字段名没被混淆，往下找第一个 CharSequence 字段（AnnotatedString 也是），
+ * 不写死混淆名；读不到时退回对象身份，和旧行为一致。反射只在缓存没命中时做一次。
  *
  * 省电要点：没有任何轮询 / 日志 / 文件写入；配置只在 Activity.onResume 时读一次（文件没变就不重读）；
  * paint 热路径里不分配对象、不做字符串比较（Class 对象缓存后按引用比较）。
@@ -181,7 +187,7 @@ final class DanmakuHook {
                 long v = (Long) a[1];
                 if ((v & 0x3FL) != 0L) return; // 只处理 sRGB；Unspecified/其他色彩空间不碰
 
-                int rgb = colorOf(System.identityHashCode(p.thisObject), c.mode);
+                int rgb = colorOf(System.identityHashCode(p.thisObject), p.thisObject, c.mode);
                 int alpha = (int) ((v >>> 56) & 0xFF);           // 保留原透明度
                 int argb = (alpha << 24) | rgb;
                 a[1] = (((long) argb) & 0xFFFFFFFFL) << 32;      // Compose 的 sRGB Color：ARGB 放在高 32 位
@@ -190,14 +196,71 @@ final class DanmakuHook {
         }
     }
 
-    private static int colorOf(int key, int mode) {
+    /** key = 对象身份，只用来当缓存键；真正决定颜色的是文字（读不到才用身份）。 */
+    private static int colorOf(int key, Object mp, int mode) {
         int slot = (key ^ (key >>> 8)) & 255;
         long e = CACHE[slot];
         int tag = 0x01000000 | (mode << 25);
         if ((int) (e >>> 32) == key && ((int) e & 0xFF000000) == tag) return (int) e & 0xFFFFFF;
-        int rgb = pick(key, mode);
+        int rgb = pick(textKey(mp, key), mode);
         CACHE[slot] = ((long) key << 32) | (tag | rgb) & 0xFFFFFFFFL;
         return rgb;
+    }
+
+    // ------------------------------------------------------------ 读弹幕文字（只在缓存没命中时调用）
+
+    private static volatile Field intrinsicsF;
+    private static volatile Class<?> intrCls;
+    private static volatile Field[] intrFields;
+
+    private static Field findIntrinsics(Class<?> k) {
+        try {
+            Field f = k.getDeclaredField("intrinsics");
+            f.setAccessible(true);
+            return f;
+        } catch (Throwable ignored) {
+        }
+        // 字段名万一被改了：找类型名带 MultiParagraphIntrinsics 的字段
+        for (Field f : k.getDeclaredFields()) {
+            if (f.getType().getName().endsWith("MultiParagraphIntrinsics")) {
+                f.setAccessible(true);
+                return f;
+            }
+        }
+        return null;
+    }
+
+    /** 文字 → 颜色 key。读不到就退回 fallback（对象身份）。 */
+    private static int textKey(Object mp, int fallback) {
+        try {
+            if (mp == null) return fallback;
+            Field fi = intrinsicsF;
+            if (fi == null) {
+                fi = findIntrinsics(mp.getClass());
+                if (fi == null) return fallback;
+                intrinsicsF = fi;
+            }
+            Object in = fi.get(mp);
+            if (in == null) return fallback;
+            Class<?> ic = in.getClass();
+            Field[] fs = intrFields;
+            if (fs == null || intrCls != ic) {
+                fs = ic.getDeclaredFields();
+                for (Field f : fs) f.setAccessible(true);
+                intrFields = fs;
+                intrCls = ic;
+            }
+            for (Field f : fs) {
+                if (java.lang.reflect.Modifier.isStatic(f.getModifiers())) continue;
+                if (!CharSequence.class.isAssignableFrom(f.getType())) continue;
+                Object v = f.get(in);
+                if (v instanceof CharSequence && ((CharSequence) v).length() > 0) {
+                    return v.toString().hashCode();
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return fallback;
     }
 
     private static int mix(int x) {
@@ -209,7 +272,7 @@ final class DanmakuHook {
         return x;
     }
 
-    /** 同一个 key 永远得到同一个颜色，所以弹幕滚动时每帧重绘不会闪。HSV→RGB 手算，不分配对象（每帧每条弹幕都会走到这里）。 */
+    /** 同一个 key（文字哈希）永远得到同一个颜色，所以弹幕滚动、被重新测量都不会闪。HSV→RGB 手算，不分配对象（每帧每条弹幕都会走到这里）。 */
     private static int pick(int key, int mode) {
         int m = mix(key);
         float h = ((m & 0xFFFF) % 360) / 60f;
