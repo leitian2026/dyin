@@ -12,7 +12,6 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 
 import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
 
 /**
  * 把"点赞"改成"打开评论"。两个入口，各有开关，每个入口只钩一个方法：
@@ -40,42 +39,33 @@ final class CommentHook {
     /** 同一次双击只打开一次评论。 */
     private static final long REOPEN_GAP_MS = 800;
 
-    private static volatile boolean clickHooked, dtapHooked;
     private static volatile long lastOpenAt;
 
-    static boolean allHooked() {
-        return clickHooked && dtapHooked;
-    }
-
-    /** 需要目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到挂上。 */
-    static void tryHook(ClassLoader cl) {
-        if (cl == null || allHooked()) return;
-        if (!dtapHooked) dtapHooked = hook(cl, PANEL, PANEL_DTAP_METHOD, true, new DtapHook());
-        if (!clickHooked) clickHooked = hook(cl, DIGG, DIGG_CLICK_METHOD, false, new DiggHook());
-    }
+    private static final XC_MethodHook DTAP_HOOK = new DtapHook();
+    private static final XC_MethodHook DIGG_HOOK = new DiggHook();
 
     /**
-     * 按类名 + 方法名挂钩。返回 true 表示不用再试（挂上了，或不是“类还没加载”的原因）；
-     * 类还没加载返回 false，下次回到前台再试。motionOnly：只挂参数是单个 MotionEvent 的重载。
+     * 这两个方法名是混淆的（换版本会变），不做放宽匹配：双击入口如果只按签名 void(MotionEvent) 去猜，
+     * 猜错了会让每次触摸都打开评论，宁可不挂。找不到就放弃并记住（HookGuard），按钮点赞 / 双击点赞照常。
      */
-    private static boolean hook(ClassLoader cl, String cls, String name, boolean motionOnly, XC_MethodHook h) {
-        try {
-            int n = 0;
-            for (Method m : Class.forName(cls, false, cl).getDeclaredMethods()) {
-                if (!m.getName().equals(name)) continue;
-                if (motionOnly) {
-                    Class<?>[] pt = m.getParameterTypes();
-                    if (pt.length != 1 || pt[0] != MotionEvent.class) continue;
-                }
-                XposedBridge.hookMethod(m, h);
-                n++;
+    static void tryHook(ClassLoader cl) {
+        if (cl == null) return;
+        HookGuard.hook(HookGuard.DTAP, PANEL, motion(PANEL_DTAP_METHOD), DTAP_HOOK,
+                PANEL_DTAP_METHOD + "(MotionEvent) 在 BaseListFragmentPanel 里没有找到（方法名是混淆的，抖音更新后会变，需要重新追踪）", cl);
+        HookGuard.hook(HookGuard.DIGG, DIGG, HookGuard.named(DIGG_CLICK_METHOD), DIGG_HOOK,
+                DIGG_CLICK_METHOD + " 在 FeedDiggPresenter 里没有找到（方法名是混淆的，抖音更新后会变，需要重新追踪）", cl);
+    }
+
+    /** 只挂参数是单个 MotionEvent、名字匹配的重载。 */
+    private static HookGuard.Filter motion(final String name) {
+        return new HookGuard.Filter() {
+            @Override
+            public boolean ok(Method m) {
+                if (!m.getName().equals(name)) return false;
+                Class<?>[] pt = m.getParameterTypes();
+                return pt.length == 1 && pt[0] == MotionEvent.class;
             }
-            return n > 0 || !motionOnly; // 双击入口一个都没找到 = 签名不对，继续等；爱心按钮沿用旧行为
-        } catch (ClassNotFoundException e) {
-            return false;
-        } catch (Throwable t) {
-            return true;
-        }
+        };
     }
 
     /** 双击：跳过抖音的双击处理（红心和点赞都在它下面），改为打开评论。找不到评论按钮也不放行：双击不点赞。 */
