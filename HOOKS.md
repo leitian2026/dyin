@@ -47,6 +47,7 @@ LSPosed 日志里会出现两种关键行（只在状态变成「放弃」「不
 | `TimeHook.java` | 时长：4 个钩子（进度 / 停止 / 释放 / 开始播放），单方法按名字匹配的示例 |
 | `CommentHook.java` | 点赞改评论：2 个钩子（混淆名，不放宽匹配的示例） |
 | `MainActivity.java` | 设置页；`HOOK_NAMES` 是「钩子 id → 中文名」，`describeHooks` 解析 `hooks.properties` |
+| `TabHook.java` | 首页顶部标签隐藏：类名按没混淆的 `HomeTopTabItemViewNew` 找（走 HookGuard），挂框架方法 `View.setContentDescription` 并按这个类过滤 |
 | `IdleExit.java` | 无操作自动退出：钩 `Activity.onUserInteraction`（框架方法，不走 HookGuard），记最后操作时刻；一条延时消息到点检查，够了结束进程 |
 | `RootShell.java` | `readFile(pkg, name)` 用 root 读抖音数据目录里的文件 |
 
@@ -157,13 +158,13 @@ FooHook.tryHook(cl);
 
 ## 5. 什么时候不用走 `HookGuard`
 
-- 钩 **Android 框架 / Java 标准库**里一定存在的方法，例如 `DanmakuHook.hookResume` 里的 `Activity.onResume`、`IdleExit.install` 里的 `Activity.onUserInteraction`。
+- 钩 **Android 框架 / Java 标准库**里一定存在的方法，例如 `DanmakuHook.hookResume` 里的 `Activity.onResume`、`IdleExit.install` 里的 `Activity.onUserInteraction`、`TabHook` 里的 `View.setContentDescription`（后者必须先用 `HookGuard.find` 确认抖音的目标类存在才挂，找不到类就不挂这个全局钩子）。
 - 不是钩子的功能：设置页、配置读写、`TimePanel` 浮窗、`RootShell`。
 - 这两类之外，一律走 `HookGuard`。
 
 ## 6. 提交前自测清单（逐条打勾）
 
-- [ ] `grep -rn "hookMethod\|hookAllMethods" app/src` 里，除了 `HookGuard.java`、`Activity.onResume`、`Activity.onUserInteraction`、以及分档匹配里由 `tryInstall` 汇报结果的那一处，没有别的直接挂钩。
+- [ ] `grep -rn "hookMethod\|hookAllMethods" app/src` 里，除了 `HookGuard.java`、`Activity.onResume`、`Activity.onUserInteraction`、`View.setContentDescription`（TabHook）、以及分档匹配里由 `tryInstall` 汇报结果的那一处，没有别的直接挂钩。
 - [ ] 新常量的值 == 它在 `IDS` 里的下标；`IDS` 长度 == 常量个数。
 - [ ] `tryHook` / `tryInstall` 在 `DanmakuHook.init` **和** `DanmakuHook.hookResume` 里都有调用。
 - [ ] `MainActivity.HOOK_NAMES` 里有这个 id。
