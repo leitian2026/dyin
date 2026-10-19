@@ -13,27 +13,18 @@
 1. LSPosed 启用模块，作用域勾选抖音，强杀抖音重开。
 2. 打开模块设置，点「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
-## 1.16.5：弹幕颜色按首字固定，读不到文字的不改色
-TextRec 记录显示弹幕不是每帧重绘：每条弹幕只在缓存层被重新录制时才走几次 `MultiParagraph.paint`，按 `MultiParagraph` 对象身份取色会在重新录制时换色，弹幕多时表现为闪色。现在颜色由弹幕文字的第一个字决定（第一个字是符号就用后面第一个不是符号的字；整句都是符号用整句文字），首字相同的弹幕同色。读不到文字的弹幕不改色，保持原样。设置页里「同一条弹幕怎么固定颜色」已去掉；`keyByText` 配置键保留但不再起作用。没有在真机上验证过。
+## 1.16.3：时长改挂播放器真实的状态回调（TextRec 1.22.4 追踪确认）
+1.16.2 的关键字扫描已删除，换成追踪到的真实方法名。全部在 `OnUIPlayListenerDelegate`（`com.ss.android.ugc.aweme.video.simplayer.listener.base`，40.7.0 没混淆，第一个参数是视频 id）：
+- **离开视频 → 立刻隐藏**：`onPlayStop` / `onPlayRelease`。划走时 60ms 内依次触发 `onPlayPause → onPausePlay → onPlayStop → onPlayRelease`；用户手动暂停只有 `onPlayPause` / `onPausePlay`，没有 stop / release，所以**暂停时文字保持显示**，不用靠猜。只处理当前视频的事件（旧视频迟到的 stop 不会把新视频的文字藏掉）。
+- **新视频开始播放 → 立刻画出来**：`onPlaying(String id, PlayerEvent)`。PlayerEvent 的 `toString` 形如 `PlayerEvent{id='…', codecType=0, duration=26331, …}`，用正则取 `duration=`（不依赖字段名）画 `00:00 / 总时长`，比第一个进度回调早。一个参数的重载没有时长，只用来记下当前视频。
+- 进度回调 `onPlayProgressChange` 照旧负责每秒更新。
+- 每个事件会经过 `ManualResolutionSwitchMaskingPlayListener` / `BufferOptListener` / `PlayFailedFilterListener` / `ProgressOptListener` / `ListenerWithReporterSupplier` / `SafeOnUIPlayListenerReporter` 5~6 个包装监听器重复到达，处理都是幂等的。
+- 离开后 1 秒内忽略该视频迟到的进度回调。
+- **兜底**（直播间的切换还没有追踪验证过，不知道刷进直播间时视频是否也走 stop / release）：一条 1 秒的延时消息，1 秒没有进度回调才去看进度条，暂停时进度条还在屏幕上就继续显示。没有任何周期性轮询。验证过直播后可以整段删掉。
+- 追踪里排除掉的方案：`Fragment#onResume` / `setUserVisibleHint` 划动期间只触发 2 / 0 次，不是每次翻页都有。
+- 没有在真机上验证过；这版也只做过语法层面的检查。
 
-## 1.16.3：时长改钩播放分发器，状态方法用 TextRec 追到的真名
-TextRec 追踪（40.7.0）发现：`DIPlayListenerDispatcher`（`com.ss.android.ugc.aweme.o.oplayer.util`，主线程）是播放事件的共用入口，进度和状态回调都经过它，**每个事件只到一次**；1.16.2 挂的 `OnUIPlayListenerDelegate` 在它下面，每个事件会被 5～6 个包装监听器重复收到（进度一次 8～9 遍）。
-- 进度：`onPlayProgressChange(String id, long 位置ms, long 总时长ms)`（同上）。
-- 状态（真实名字，不再按关键字猜）：`onPlayStop` / `onPlayRelease` 隐藏；暂停不处理，文字保持显示；`onPlaying` / `onRenderFirstFrame` 新视频开始，立刻显示，`onPlaying` 的 `PlayerEvent` 里读 `duration` 作为总时长。`onPreparePlay` 不用（预加载的视频也会走）。
-- **删除了模块自己的检测逻辑**：`ProSeekBarView#setProgress` 钩子（播放时每次动画都调，耗电）、暂停时看进度条还在不在的检查、1 秒看门狗、对应的延时消息。现在没有任何定时器，也没有轮询。换视频的判断也不再用时间窗口：进度和状态回调都带视频 id，只认当前播放的那个，`onPlayStop` / `onPlayRelease` 停掉的视频之后迟到的进度按 id 忽略，直到它再次 `onPlaying`。
-- 一次翻页的事件顺序（追踪实测，同一秒内）：旧视频 `onPlayStop` → `onPlayRelease`，新视频 `onPreparePlay` → `onPlaying`，约 1 秒内 `onRenderFirstFrame`。
-- 没有在真机上验证过。如果翻页过程中（手指还在滑）文字不消失，是因为这些事件都在翻页落定时才到，需要再追页面滑动的信号。
-
-## 1.16.2：时长改听播放器自己的状态回调
-1.16.1 靠「回调停了」「进度条在不在」「手指有没有滑」去推断，本质还是模块在猜。现在改成直接钩播放器自己报的状态变化：
-- 在 `OnUIPlayListenerDelegate`（和进度回调同一个类）里，启动时扫描除 `onPlayProgressChange` 之外的所有 `on*` 方法，按方法名关键字归类（`TimeHook.kindOf`）：
-  - 名字含 stop / release / fail / error → **立刻隐藏**（带视频 id 且不是当前视频的事件忽略，免得旧视频迟到的 stop 把新视频的文字藏掉）；
-  - 含 pause → 150ms 后看一次进度条：还在屏幕上是用户手动暂停，保持显示；已经走了是翻页离开，隐藏（翻页动画没走完再看两次）；
-  - 含 firstFrame / renderStart → **新视频首帧出来就立刻画出来**（先显示 `00:00 / --:--`，第一个进度回调到了换成真实时长）；
-  - 带 buffer / load / seek / cache / resolution / speed 的不算。
-- **这些回调的名字没有追踪过，是按关键字猜的。** 所以启动时把扫到的方法名写进 LSPosed 日志（`[DanmakuColor] time events hooked: …`），并把每个事件前两次触发的参数也写进去（`[DanmakuColor] ev 方法名 kind=… args=(…)`）。如果某类事件没生效，把日志发出来，按真实名字改 `kindOf`。
-- 保留：1 秒看门狗兜底（只有一条延时消息，没有轮询）、换视频后 1 秒内忽略旧视频进度回调。
-- 删除：1.16.1 的触摸钩子和翻页检测。
+## 1.16.2：（已被 1.16.3 取代）按关键字扫描状态回调
 
 ## 1.16.1：时长改成纯事件驱动（已被 1.16.2 取代）
 - 去掉了 1.16.0 的 250ms 轮询；心跳 + 1 秒看门狗；翻页靠触摸 + 进度条位移推断。
@@ -76,7 +67,7 @@ TextRec 追踪（40.7.0）发现：`DIPlayListenerDispatcher`（`com.ss.android.
 - 如果双击后还是点赞了或出了红心，说明还有别的入口，把现象告诉我；1.11.1 是旧方案，可以回退。
 
 ## 抖音版本相关（换版本后可能要改）
-- `TimeHook.DELEGATE`（播放分发器）/ `PROGRESS`，以及 `TimeHook.kindOf` 里的状态方法名：时长显示用到的类名和方法名。
+- `TimeHook.DELEGATE` / `PROGRESS` / `SEEKBAR`：时长显示用到的进度监听层和进度条类名。
 - `CommentHook.DIGG_CLICK_METHOD`（`LJJJJJL`）：爱心按钮点击入口。
 - `BaseListFragmentPanel#LLLIILIL(MotionEvent)`：双击的统一入口（红心和点赞都在它下面）。
 - 评论按钮靠 contentDescription「评论N，按钮」查找。
