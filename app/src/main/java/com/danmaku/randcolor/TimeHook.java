@@ -53,7 +53,6 @@ final class TimeHook {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
     private static volatile boolean progressHooked, seekHooked, eventsHooked, stopHooked, releaseHooked, playingHooked;
-    private static int misses;
 
     private static WeakReference<View> seekRef = new WeakReference<>(null);
     private static WeakReference<TextView> viewRef = new WeakReference<>(null);
@@ -64,20 +63,21 @@ final class TimeHook {
     private static long lastSec = -1, lastDsec = -2, lastTickAt, staleUntil;
     private static String lastText = "";
     private static int lastDx = Integer.MIN_VALUE, lastDy = Integer.MIN_VALUE;
-    private static boolean loggedOk, loggedEv, shown, watching;
+    private static boolean shown, watching;
 
     // ------------------------------------------------------------ 安装
 
+    static boolean allHooked() {
+        return progressHooked && seekHooked && eventsHooked;
+    }
+
     /** 目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到都挂上。 */
     static void tryHook(ClassLoader cl) {
-        if (cl == null || (progressHooked && seekHooked && eventsHooked)) return;
+        if (cl == null || allHooked()) return;
         attempt(cl);
         if (!progressHooked) {
             ClassLoader ctx = Thread.currentThread().getContextClassLoader();
             if (ctx != null && ctx != cl) attempt(ctx);
-        }
-        if (!progressHooked && ++misses == 6) {
-            XposedBridge.log("[DanmakuColor] time hook: classes not found yet (progress=" + progressHooked + ")");
         }
     }
 
@@ -201,10 +201,6 @@ final class TimeHook {
 
     private static void onStop(String id) {
         if (!id.equals(lastId)) return; // 别的视频的事件（比如旧视频迟到的）不动当前文字
-        if (!loggedEv) {
-            loggedEv = true;
-            XposedBridge.log("[DanmakuColor] time stop/release ok id=" + id);
-        }
         staleId = id;
         staleUntil = SystemClock.uptimeMillis() + STALE_MS; // 它迟到的进度回调不再把文字画回来
         hideNow();
@@ -265,10 +261,6 @@ final class TimeHook {
         if (dsec >= 0 && sec > dsec) sec = dsec;
         lastSec = sec;
         lastDsec = dsec;
-        if (!loggedOk) {
-            loggedOk = true;
-            XposedBridge.log("[DanmakuColor] time ok: pos=" + pos + "ms dur=" + dur + "ms");
-        }
         show(CommentHook.top.get(), fmt(sec) + " / " + (dsec >= 0 ? fmt(dsec) : "--:--"));
     }
 
