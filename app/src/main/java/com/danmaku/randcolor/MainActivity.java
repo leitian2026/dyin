@@ -15,6 +15,7 @@ import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -35,6 +36,9 @@ public class MainActivity extends Activity {
     private int cBg, cCard, cStroke, cText, cSub, cPrimary, cPrimarySoft, cField;
 
     private EditText etPkg, etIdle;
+    /** 首页顶部标签行里的 13 个标签（来自 TextRec 追踪，40.7.0）；勾选 = 隐藏。 */
+    private static final String[] TAB_LABELS = {"推荐", "关注", "热点", "同城", "商城", "经验", "游戏", "少儿", "精选", "团购", "免费看剧", "短剧", "直播"};
+    private final CheckBox[] cbTabs = new CheckBox[TAB_LABELS.length];
     private Switch swEnabled, swLikeBtn, swDtap, swTime;
     private LinearLayout segMode, statusCard;
     private TextView tvOffset;
@@ -155,6 +159,32 @@ public class MainActivity extends Activity {
         tm.addView(btns);
         root.addView(tm, cardLp());
 
+        // ---- 首页顶部标签
+        root.addView(section("首页顶部标签"));
+        LinearLayout tabs = card();
+        tabs.addView(tv("勾选的标签会被隐藏", 17, cText, true));
+        TextView tbd = tv("追踪（抖音 40.7.0）里，这台手机当前显示的是：推荐、关注、热点、同城、商城；其余 8 个在标签行里存在但抖音没有启用，哪天启用了才会出现。取消勾选后要重启抖音才恢复；只隐藏标签，左右划动仍会翻到它的页面。", 13, cSub, false);
+        tbd.setPadding(0, dp(2), 0, dp(10));
+        tabs.addView(tbd);
+        for (int r = 0; r < TAB_LABELS.length; r += 3) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            for (int i = r; i < r + 3; i++) {
+                if (i < TAB_LABELS.length) {
+                    CheckBox cb = new CheckBox(this);
+                    cb.setText(TAB_LABELS[i]);
+                    cb.setTextSize(15);
+                    cb.setTextColor(cText);
+                    cbTabs[i] = cb;
+                    row.addView(cb, new LinearLayout.LayoutParams(0, -2, 1f));
+                } else {
+                    row.addView(new View(this), new LinearLayout.LayoutParams(0, 0, 1f));
+                }
+            }
+            tabs.addView(row);
+        }
+        root.addView(tabs, cardLp());
+
         // ---- 无操作自动退出
         root.addView(section("无操作自动退出"));
         LinearLayout idle = card();
@@ -205,6 +235,11 @@ public class MainActivity extends Activity {
         swDtap.setChecked(c.dtapToComment);
         swTime.setChecked(c.timeAlways);
         etIdle.setText(String.valueOf(c.idleExitMin));
+        for (int i = 0; i < TAB_LABELS.length; i++) {
+            boolean hide = false;
+            for (String h : c.hiddenTabs) if (TAB_LABELS[i].equals(h)) hide = true;
+            cbTabs[i].setChecked(hide);
+        }
         tX = c.timeX;
         tY = c.timeY;
         showOffset();
@@ -220,6 +255,9 @@ public class MainActivity extends Activity {
         c.timeAlways = swTime.isChecked();
         c.timeX = tX;
         c.timeY = tY;
+        java.util.ArrayList<String> hid = new java.util.ArrayList<>();
+        for (int i = 0; i < TAB_LABELS.length; i++) if (cbTabs[i].isChecked()) hid.add(TAB_LABELS[i]);
+        c.hiddenTabs = hid.toArray(new String[0]);
         try {
             c.idleExitMin = Math.max(0, Math.min(1440, Integer.parseInt(etIdle.getText().toString().trim())));
         } catch (Throwable t) {
@@ -347,6 +385,7 @@ public class MainActivity extends Activity {
             {"time.stop", "视频时长：停止"},
             {"time.release", "视频时长：释放"},
             {"time.playing", "视频时长：开始播放"},
+            {"tab.hide", "首页顶部标签隐藏"},
     };
 
     /** 用 root 读抖音数据目录里的 hooks.properties（抖音进程自己写的），列出每个钩子的状态。 */
