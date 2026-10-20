@@ -39,11 +39,11 @@ public class MainActivity extends Activity {
     /** 首页顶部标签行里的 13 个标签（来自 TextRec 追踪，40.7.0）；勾选 = 隐藏。 */
     private static final String[] TAB_LABELS = {"推荐", "关注", "热点", "同城", "商城", "经验", "游戏", "少儿", "精选", "团购", "免费看剧", "短剧", "直播"};
     private final CheckBox[] cbTabs = new CheckBox[TAB_LABELS.length];
-    private Switch swEnabled, swLikeBtn, swDtap, swTime;
+    private Switch swEnabled, swLikeBtn, swDtap, swTime, swPub;
     private LinearLayout segMode, statusCard;
-    private TextView tvOffset;
-    private int tX, tY;
-    private TextView tvStatus, btnPush, btnAdjust, btnHooks;
+    private TextView tvOffset, tvPubOffset;
+    private int tX, tY, pX, pY;
+    private TextView tvStatus, btnPush, btnAdjust, btnAdjustPub, btnHooks;
     private ScrollView scroll;
 
     @Override
@@ -72,7 +72,7 @@ public class MainActivity extends Activity {
         TextView title = tv("dyin", 30, cText, true);
         title.setPadding(dp(4), 0, 0, 0);
         root.addView(title);
-        TextView sub = tv("弹幕随机颜色 · 点赞改为打开评论 · 视频时长常显", 14, cSub, false);
+        TextView sub = tv("弹幕随机颜色 · 点赞改为打开评论 · 视频时长常显 · 发布日期地点常显", 14, cSub, false);
         sub.setPadding(dp(4), dp(2), 0, dp(14));
         root.addView(sub);
 
@@ -143,7 +143,7 @@ public class MainActivity extends Activity {
         btns.setOrientation(LinearLayout.HORIZONTAL);
         btnAdjust = pillButton("打开浮窗调整位置", true);
         btnAdjust.setTextSize(16);
-        btnAdjust.setOnClickListener(v -> openAdjust());
+        btnAdjust.setOnClickListener(v -> openAdjust(false));
         btns.addView(btnAdjust, new LinearLayout.LayoutParams(0, dp(48), 1f));
         TextView reset = pillButton("归零", false);
         reset.setTextSize(16);
@@ -158,6 +158,40 @@ public class MainActivity extends Activity {
         btns.addView(reset, rl);
         tm.addView(btns);
         root.addView(tm, cardLp());
+
+        // ---- 发布日期和地点常显
+        root.addView(section("发布日期和地点常显"));
+        LinearLayout pb = card();
+        swPub = new Switch(this);
+        pb.addView(switchRow("发布日期和地点一直显示", "在视频上自己画一行「3天前 北京」，取自点开「展开」后完整文案结尾的日期和地点；每个视频要先点一次「展开」才有，划到下一个视频就撤掉；没有地点的视频只显示日期", swPub));
+        pb.addView(divider());
+        pb.addView(tv("位置微调", 17, cText, true));
+        TextView pdsc = tv("和时长位置一样：点下面的按钮，会在抖音里弹出同样的浮窗，调的是这一行的位置。点浮窗里的「完成」自动保存，回到本页会同步数值。需要 root。", 13, cSub, false);
+        pdsc.setPadding(0, dp(2), 0, dp(12));
+        pb.addView(pdsc);
+        tvPubOffset = tv("", 14, cSub, false);
+        tvPubOffset.setTypeface(Typeface.MONOSPACE);
+        tvPubOffset.setPadding(0, 0, 0, dp(12));
+        pb.addView(tvPubOffset);
+        LinearLayout pbtns = new LinearLayout(this);
+        pbtns.setOrientation(LinearLayout.HORIZONTAL);
+        btnAdjustPub = pillButton("打开浮窗调整位置", true);
+        btnAdjustPub.setTextSize(16);
+        btnAdjustPub.setOnClickListener(v -> openAdjust(true));
+        pbtns.addView(btnAdjustPub, new LinearLayout.LayoutParams(0, dp(48), 1f));
+        TextView preset = pillButton("归零", false);
+        preset.setTextSize(16);
+        preset.setOnClickListener(v -> {
+            pX = 0;
+            pY = 0;
+            showPubOffset();
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("adjusting", false).apply();
+        });
+        LinearLayout.LayoutParams prl = new LinearLayout.LayoutParams(dp(88), dp(48));
+        prl.leftMargin = dp(10);
+        pbtns.addView(preset, prl);
+        pb.addView(pbtns);
+        root.addView(pb, cardLp());
 
         // ---- 首页顶部标签
         root.addView(section("首页顶部标签"));
@@ -243,6 +277,10 @@ public class MainActivity extends Activity {
         tX = c.timeX;
         tY = c.timeY;
         showOffset();
+        swPub.setChecked(c.pubAlways);
+        pX = c.pubX;
+        pY = c.pubY;
+        showPubOffset();
         setSeg(segMode, c.mode == 1 ? 1 : 0);
     }
 
@@ -255,6 +293,9 @@ public class MainActivity extends Activity {
         c.timeAlways = swTime.isChecked();
         c.timeX = tX;
         c.timeY = tY;
+        c.pubAlways = swPub.isChecked();
+        c.pubX = pX;
+        c.pubY = pY;
         java.util.ArrayList<String> hid = new java.util.ArrayList<>();
         for (int i = 0; i < TAB_LABELS.length; i++) if (cbTabs[i].isChecked()) hid.add(TAB_LABELS[i]);
         c.hiddenTabs = hid.toArray(new String[0]);
@@ -301,8 +342,10 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------ 位置浮窗
 
     /** 把「弹出位置浮窗」的请求（timeAdjust=true）连同当前全部设置推给抖音，然后打开抖音。 */
-    private void openAdjust() {
-        swTime.setChecked(true);
+    private void openAdjust(final boolean pub) {
+        final TextView btn = pub ? btnAdjustPub : btnAdjust;
+        if (pub) swPub.setChecked(true);
+        else swTime.setChecked(true);
         DanmakuConfig c = read();
         final String pkgs = etPkg.getText().toString().trim();
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("cfg", c.toText()).putString("pkg", pkgs).apply();
@@ -311,9 +354,10 @@ public class MainActivity extends Activity {
             showStatus("请先填目标包名", 2);
             return;
         }
-        c.timeAdjust = true;
+        if (pub) c.pubAdjust = true;
+        else c.timeAdjust = true;
         final String pushText = c.toText();
-        setBusy(btnAdjust, true, "正在打开…");
+        setBusy(btn, true, "正在打开…");
         showStatus("正在推送…（首次会弹出 root 授权，请允许）", 0);
         new Thread(() -> {
             final StringBuilder sb = new StringBuilder();
@@ -336,7 +380,7 @@ public class MainActivity extends Activity {
             final String err = sb.toString();
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
-                setBusy(btnAdjust, false, "打开浮窗调整位置");
+                setBusy(btn, false, "打开浮窗调整位置");
                 if (ok == null) {
                     showStatus(err.isEmpty() ? "推送失败" : err, 2);
                     return;
@@ -369,6 +413,9 @@ public class MainActivity extends Activity {
                 tX = c.timeX;
                 tY = c.timeY;
                 showOffset();
+                pX = c.pubX;
+                pY = c.pubY;
+                showPubOffset();
                 SharedPreferences sp2 = getSharedPreferences(PREFS, MODE_PRIVATE);
                 sp2.edit().putString("cfg", read().toText()).putBoolean("adjusting", false).apply();
             });
@@ -386,6 +433,7 @@ public class MainActivity extends Activity {
             {"time.release", "视频时长：释放"},
             {"time.playing", "视频时长：开始播放"},
             {"tab.hide", "首页顶部标签隐藏"},
+            {"pub.text", "发布日期地点：展开文案"},
     };
 
     /** 用 root 读抖音数据目录里的 hooks.properties（抖音进程自己写的），列出每个钩子的状态。 */
@@ -443,6 +491,10 @@ public class MainActivity extends Activity {
 
     private void showOffset() {
         if (tvOffset != null) tvOffset.setText("当前位置  水平 " + signed(tX) + " px　垂直 " + signed(tY) + " px");
+    }
+
+    private void showPubOffset() {
+        if (tvPubOffset != null) tvPubOffset.setText("当前位置  水平 " + signed(pX) + " px　垂直 " + signed(pY) + " px");
     }
 
     private static String signed(int v) {
