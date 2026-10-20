@@ -1,6 +1,7 @@
 package com.danmaku.randcolor;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
@@ -43,6 +44,11 @@ public class MainActivity extends Activity {
     private LinearLayout segMode, statusCard;
     private TextView tvOffset, tvPubOffset;
     private int tX, tY, pX, pY;
+    /** 时长 / 发布信息文字的字号（sp），和视频文案的颜色（0 = 不改）；字号在抖音的位置浮窗里调，回到本页同步。 */
+    private int tSize = 20, pSize = 16, capColor;
+    private Switch swCapOutline;
+    private View capSwatch;
+    private TextView tvCapColor;
     private TextView tvStatus, btnPush, btnAdjust, btnAdjustPub, btnHooks;
     private ScrollView scroll;
 
@@ -132,7 +138,7 @@ public class MainActivity extends Activity {
         tm.addView(switchRow("视频时长一直显示", "在视频上自己画一行 00:12 / 03:45，抖音任何界面都显示，播放时随进度走动；刷到直播或离开视频页自动隐藏", swTime));
         tm.addView(divider());
         tm.addView(tv("位置微调", 17, cText, true));
-        TextView td = tv("点下面的按钮，会在抖音里弹出一个浮窗：两条滑动条（左边减、右边加），两端的 − / + 每点一下移动 2 像素，一边调一边看时长怎么动。点浮窗里的「完成」自动保存，回到本页会同步数值。需要 root。", 13, cSub, false);
+        TextView td = tv("点下面的按钮，会在抖音里弹出一个浮窗：三条滑动条：水平、垂直、字号（左边减、右边加），两端的 − / + 每点一下移动 2 像素（字号是增减 1 号），一边调一边看时长怎么动。点浮窗里的「完成」自动保存，回到本页会同步数值。需要 root。", 13, cSub, false);
         td.setPadding(0, dp(2), 0, dp(12));
         tm.addView(td);
         tvOffset = tv("", 14, cSub, false);
@@ -163,10 +169,10 @@ public class MainActivity extends Activity {
         root.addView(section("发布日期和地点常显"));
         LinearLayout pb = card();
         swPub = new Switch(this);
-        pb.addView(switchRow("发布日期和地点一直显示", "在视频上自己画一行「3天前 北京」，取自点开「展开」后完整文案结尾的日期和地点；每个视频要先点一次「展开」才有，划到下一个视频就撤掉；没有地点的视频只显示日期", swPub));
+        pb.addView(switchRow("发布日期和地点一直显示", "在视频文案下面自己画一行「2026-10-19 11:50:00 广西 南宁」，取自视频本身的发布时间（精确到秒）和 IP 属地（省，有城市就加市），不用点「展开」；划到下一个视频就换；没有地点的视频只显示时间", swPub));
         pb.addView(divider());
         pb.addView(tv("位置微调", 17, cText, true));
-        TextView pdsc = tv("和时长位置一样：点下面的按钮，会在抖音里弹出同样的浮窗，调的是这一行的位置。点浮窗里的「完成」自动保存，回到本页会同步数值。需要 root。", 13, cSub, false);
+        TextView pdsc = tv("和时长位置一样：点下面的按钮，会在抖音里弹出同样的浮窗，调的是这一行的位置和字号（位置是相对视频文案左下角的偏移）。点浮窗里的「完成」自动保存，回到本页会同步数值。需要 root。", 13, cSub, false);
         pdsc.setPadding(0, dp(2), 0, dp(12));
         pb.addView(pdsc);
         tvPubOffset = tv("", 14, cSub, false);
@@ -192,6 +198,31 @@ public class MainActivity extends Activity {
         pbtns.addView(preset, prl);
         pb.addView(pbtns);
         root.addView(pb, cardLp());
+
+        // ---- 视频文案样式
+        root.addView(section("视频文案样式"));
+        LinearLayout cp = card();
+        swCapOutline = new Switch(this);
+        cp.addView(switchRow("视频文案加黑色描边", "给视频下方的文案（标题、话题）加一圈黑边，亮背景上也看得清。关掉后要重启抖音才恢复", swCapOutline));
+        cp.addView(divider());
+        cp.addView(tv("文案颜色", 17, cText, true));
+        TextView cpd = tv("点「选色」从色表里挑一个颜色；话题、@ 这类抖音自己上色的文字不变。选「不改」就用抖音原来的颜色（选过颜色再改回「不改」，要重启抖音才恢复）。", 13, cSub, false);
+        cpd.setPadding(0, dp(2), 0, dp(12));
+        cp.addView(cpd);
+        LinearLayout crow = new LinearLayout(this);
+        crow.setOrientation(LinearLayout.HORIZONTAL);
+        crow.setGravity(Gravity.CENTER_VERTICAL);
+        capSwatch = new View(this);
+        crow.addView(capSwatch, new LinearLayout.LayoutParams(dp(28), dp(28)));
+        tvCapColor = tv("", 14, cSub, false);
+        tvCapColor.setPadding(dp(12), 0, 0, 0);
+        crow.addView(tvCapColor, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView pick = pillButton("选色", true);
+        pick.setTextSize(16);
+        pick.setOnClickListener(v -> showPalette());
+        crow.addView(pick, new LinearLayout.LayoutParams(dp(88), dp(48)));
+        cp.addView(crow);
+        root.addView(cp, cardLp());
 
         // ---- 首页顶部标签
         root.addView(section("首页顶部标签"));
@@ -280,7 +311,13 @@ public class MainActivity extends Activity {
         swPub.setChecked(c.pubAlways);
         pX = c.pubX;
         pY = c.pubY;
+        tSize = c.timeSize;
+        pSize = c.pubSize;
+        showOffset();
         showPubOffset();
+        swCapOutline.setChecked(c.capOutline);
+        capColor = c.capColor;
+        showCapColor();
         setSeg(segMode, c.mode == 1 ? 1 : 0);
     }
 
@@ -296,6 +333,10 @@ public class MainActivity extends Activity {
         c.pubAlways = swPub.isChecked();
         c.pubX = pX;
         c.pubY = pY;
+        c.timeSize = tSize;
+        c.pubSize = pSize;
+        c.capOutline = swCapOutline.isChecked();
+        c.capColor = capColor;
         java.util.ArrayList<String> hid = new java.util.ArrayList<>();
         for (int i = 0; i < TAB_LABELS.length; i++) if (cbTabs[i].isChecked()) hid.add(TAB_LABELS[i]);
         c.hiddenTabs = hid.toArray(new String[0]);
@@ -415,6 +456,9 @@ public class MainActivity extends Activity {
                 showOffset();
                 pX = c.pubX;
                 pY = c.pubY;
+                tSize = c.timeSize;
+                pSize = c.pubSize;
+                showOffset();
                 showPubOffset();
                 SharedPreferences sp2 = getSharedPreferences(PREFS, MODE_PRIVATE);
                 sp2.edit().putString("cfg", read().toText()).putBoolean("adjusting", false).apply();
@@ -435,6 +479,7 @@ public class MainActivity extends Activity {
             {"tab.hide", "首页顶部标签隐藏"},
             {"pub.text", "发布日期地点：展开文案"},
             {"pub.bind", "发布日期地点：视频数据"},
+            {"pub.anchor", "视频文案：位置 / 描边 / 改色"},
     };
 
     /** 用 root 读抖音数据目录里的 hooks.properties（抖音进程自己写的），列出每个钩子的状态。 */
@@ -490,12 +535,103 @@ public class MainActivity extends Activity {
         return b.toString().trim();
     }
 
+    // ------------------------------------------------------------ 文案颜色色表
+
+    /** 色表：6 列 × 4 行，名字 + 不透明 RGB。 */
+    private static final String[] PAL_NAMES = {
+            "白", "浅灰", "灰", "黑", "米黄", "柠檬黄",
+            "金", "橙", "深橙", "红", "玫红", "粉",
+            "淡紫", "紫", "靛蓝", "蓝", "天蓝", "青",
+            "薄荷", "绿", "嫩绿", "草绿", "棕", "肉粉"};
+    private static final int[] PAL = {
+            0xFFFFFF, 0xD9D9D9, 0x9E9E9E, 0x000000, 0xFFF3C4, 0xFFEB3B,
+            0xFFC107, 0xFF9800, 0xFF5722, 0xF44336, 0xE91E63, 0xFF80AB,
+            0xCE93D8, 0x9C27B0, 0x3F51B5, 0x2196F3, 0x4FC3F7, 0x00BCD4,
+            0x1DE9B6, 0x4CAF50, 0xA5D6A7, 0x8BC34A, 0x8D6E63, 0xFFCCBC};
+
+    private void showCapColor() {
+        if (capSwatch == null || tvCapColor == null) return;
+        GradientDrawable g = new GradientDrawable();
+        g.setShape(GradientDrawable.OVAL);
+        g.setStroke(dp(1), cStroke);
+        if (capColor == 0) {
+            g.setColor(0x00000000);
+            tvCapColor.setText("不改（抖音原来的颜色）");
+        } else {
+            g.setColor(capColor);
+            String name = "";
+            for (int i = 0; i < PAL.length; i++) if ((PAL[i] | 0xFF000000) == capColor) name = PAL_NAMES[i] + "  ";
+            tvCapColor.setText("当前：" + name + String.format("#%06X", capColor & 0xFFFFFF));
+        }
+        capSwatch.setBackground(g);
+    }
+
+    /** 弹出色表：点一个颜色就选中并关掉；「不改」恢复成抖音原色。 */
+    private void showPalette() {
+        final AlertDialog[] dlg = new AlertDialog[1];
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(16), dp(8), dp(16), dp(4));
+        TextView none = pillButton(capColor == 0 ? "✓ 不改（抖音原色）" : "不改（抖音原色）", false);
+        none.setTextSize(15);
+        none.setOnClickListener(v -> {
+            capColor = 0;
+            showCapColor();
+            dlg[0].dismiss();
+        });
+        LinearLayout.LayoutParams nl = new LinearLayout.LayoutParams(-1, dp(44));
+        nl.bottomMargin = dp(10);
+        col.addView(none, nl);
+        for (int r = 0; r < PAL.length; r += 6) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            for (int i = r; i < r + 6; i++) {
+                final int rgb = PAL[i] | 0xFF000000;
+                LinearLayout cell = new LinearLayout(this);
+                cell.setOrientation(LinearLayout.VERTICAL);
+                cell.setGravity(Gravity.CENTER_HORIZONTAL);
+                TextView sw = new TextView(this);
+                sw.setGravity(Gravity.CENTER);
+                sw.setTextSize(18);
+                sw.setTypeface(Typeface.DEFAULT_BOLD);
+                GradientDrawable g = new GradientDrawable();
+                g.setShape(GradientDrawable.OVAL);
+                g.setColor(rgb);
+                g.setStroke(dp(1), 0x66808080);
+                sw.setBackground(g);
+                if (rgb == capColor) {
+                    sw.setText("✓");
+                    sw.setTextColor(luminance(rgb) > 140 ? 0xFF000000 : 0xFFFFFFFF);
+                }
+                sw.setOnClickListener(v -> {
+                    capColor = rgb;
+                    showCapColor();
+                    dlg[0].dismiss();
+                });
+                cell.addView(sw, new LinearLayout.LayoutParams(dp(40), dp(40)));
+                TextView nm = tv(PAL_NAMES[i], 11, cSub, false);
+                nm.setGravity(Gravity.CENTER);
+                cell.addView(nm, new LinearLayout.LayoutParams(-2, -2));
+                LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(0, -2, 1f);
+                cl.bottomMargin = dp(8);
+                row.addView(cell, cl);
+            }
+            col.addView(row);
+        }
+        dlg[0] = new AlertDialog.Builder(this).setTitle("选择文案颜色").setView(col).setNegativeButton("取消", null).create();
+        dlg[0].show();
+    }
+
+    private static int luminance(int rgb) {
+        return (((rgb >> 16) & 0xFF) * 299 + ((rgb >> 8) & 0xFF) * 587 + (rgb & 0xFF) * 114) / 1000;
+    }
+
     private void showOffset() {
-        if (tvOffset != null) tvOffset.setText("当前位置  水平 " + signed(tX) + " px　垂直 " + signed(tY) + " px");
+        if (tvOffset != null) tvOffset.setText("当前位置  水平 " + signed(tX) + " px　垂直 " + signed(tY) + " px　字号 " + tSize + " sp");
     }
 
     private void showPubOffset() {
-        if (tvPubOffset != null) tvPubOffset.setText("当前位置  水平 " + signed(pX) + " px　垂直 " + signed(pY) + " px");
+        if (tvPubOffset != null) tvPubOffset.setText("当前位置  水平 " + signed(pX) + " px　垂直 " + signed(pY) + " px　字号 " + pSize + " sp");
     }
 
     private static String signed(int v) {
