@@ -53,6 +53,7 @@ final class DanmakuHook {
         CommentHook.tryHook(lp.classLoader);
         TimeHook.tryHook(lp.classLoader);
         TabHook.tryHook(lp.classLoader);
+        PubHook.tryHook(lp.classLoader);
         IdleExit.install();
         hookResume();
     }
@@ -97,6 +98,7 @@ final class DanmakuHook {
                         Activity a = (Activity) p.thisObject;
                         CommentHook.top = new WeakReference<>(a);
                         TimeHook.onResume(a);
+                        PubHook.onResume(a);
                         IdleExit.onResume();
                         HookGuard.noteVersion(a);
                         // 每个钩子都有结论（挂上 / 放弃 / 不再重试）之后，回到前台不再扫描类、不再挂钩
@@ -105,6 +107,7 @@ final class DanmakuHook {
                         CommentHook.tryHook(cl);
                         TimeHook.tryHook(cl);
                         TabHook.tryHook(cl);
+                        PubHook.tryHook(cl);
                         tryInstall(cl); // Compose 类可能晚于进程启动才可用
                     } catch (Throwable ignored) {
                     }
