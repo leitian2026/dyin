@@ -54,7 +54,7 @@ final class PubHook {
     /** 版本相关（40.7.0）。 */
     private static final String DMT = "com.bytedance.ies.dmt.ui.widget.DmtTextView";
     private static final String MENTION = "com.ss.android.ugc.aweme.views.MentionTextView";
-    private static final String PLACEHOLDER = "3天前 北京";
+    private static final String PLACEHOLDER = "2026-10-17 14:32:08 北京";
     /** 结尾「日期 地点」最多看多少个字符。 */
     private static final int MAX_TAIL = 40;
 
@@ -63,8 +63,6 @@ final class PubHook {
     private static final String AWEME = "com.ss.android.ugc.aweme.feed.model.Aweme";
     /** 最多记多少个视频（feed 无限滚动，只留最近的，当前视频和左右预加载的都在里面）。 */
     private static final int MAX_INFO = 48;
-    /** 日期显示成「N天前」的上限（天）；再早显示「M月D日」。边界按经过的时间算，和抖音页面可能差一点。 */
-    private static final int DAYS_AGO = 7;
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper()); // 只用来把非主线程的事件转回主线程
     private static final XC_MethodHook HOOK = new Hook();
@@ -294,35 +292,28 @@ final class PubHook {
         show(CommentHook.top.get(), format(r));
     }
 
-    /**
-     * 发布时间 → 文字。按经过的时间算：<1 分钟「刚刚」，<1 小时「N分钟前」，<24 小时「N小时前」，<DAYS_AGO 天「N天前」，
-     * 再早「M月D日」（不是今年的「YYYY年M月D日」）；有地点就接在后面。抖音页面自己的边界可能和这里差一点。
-     */
+    /** 发布时间 → 「2026-10-17 14:32:08」（createTime 是秒级时间戳，按手机时区），有地点就接在后面。 */
     private static String format(Info r) {
-        long diff = System.currentTimeMillis() - r.sec * 1000L;
-        StringBuilder b = new StringBuilder(24);
-        long min = diff / 60000L;
-        if (min < 1) {
-            b.append("刚刚");
-        } else if (min < 60) {
-            b.append(min).append("分钟前");
-        } else if (min < 24 * 60) {
-            b.append(min / 60).append("小时前");
-        } else if (min / (24 * 60) < DAYS_AGO) {
-            b.append(min / (24 * 60)).append("天前");
-        } else {
-            Calendar c = Calendar.getInstance();
-            int thisYear = c.get(Calendar.YEAR);
-            c.setTimeInMillis(r.sec * 1000L);
-            if (c.get(Calendar.YEAR) != thisYear) b.append(c.get(Calendar.YEAR)).append('年');
-            b.append(c.get(Calendar.MONTH) + 1).append('月').append(c.get(Calendar.DAY_OF_MONTH)).append('日');
-        }
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(r.sec * 1000L);
+        StringBuilder b = new StringBuilder(32);
+        b.append(c.get(Calendar.YEAR)).append('-');
+        two(b, c.get(Calendar.MONTH) + 1).append('-');
+        two(b, c.get(Calendar.DAY_OF_MONTH)).append(' ');
+        two(b, c.get(Calendar.HOUR_OF_DAY)).append(':');
+        two(b, c.get(Calendar.MINUTE)).append(':');
+        two(b, c.get(Calendar.SECOND));
         String ip = r.ip;
         if (ip != null) {
             ip = ip.trim();
             if (!ip.isEmpty()) b.append(' ').append(ip);
         }
         return b.toString();
+    }
+
+    private static StringBuilder two(StringBuilder b, int v) {
+        if (v < 10) b.append('0');
+        return b.append(v);
     }
 
     private static void onCaptured(String text) {
