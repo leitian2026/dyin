@@ -60,6 +60,16 @@ import de.robv.android.xposed.XposedBridge;
  *    由挂在文案上的 OnLayoutChangeListener 把文字重新放一次（事件触发，没有定时器）。
  *  - 找不到类或屏幕上没有文案控件时，退回以前的位置：屏幕中心 + (pubX, pubY)。
  *
+ * 文案控件有两种类（依据 textrec-tasks-20261020-150752 / 143514 的 SETTEXT 记录）：
+ *  - HorizonPhotosViewHolder（第一个视频，bind this=HorizonPhotosViewHolder）：文案 SETTEXT 在
+ *    com.ss.android.ugc.aweme.feed.desc.ui.ScrollMentionTextView#2131369754；
+ *  - 其他视频：SETTEXT 在 com.ss.android.ugc.aweme.views.MentionTextView#2131401418（「玉米，加州，等各种🐍宝宝」「找个帮忙喂鸡的」……），
+ *    同一界面还有一个 MentionTextView#2131412706，导出里只见到它被清空、没见到有文字。
+ *  所以文案控件 = 这两个类的实例（不写死 id，id 每个版本都会变）。有好几个候选时按文案文字认：文字的开头和 Aweme.desc 的开头相同
+ *  （desc 是 String 字段，快照里有 this.desc）。bind 比文案的 setText 早（setText 在 bind 里），所以 bind 钩子挂在 before，先记下 desc。
+ *  - 文案文字一设上（DmtTextView#setText 钩子里认出这个控件）就立刻改字色 / 黑边，并且如果它是正在播放的视频的文案就把它当锚点
+ *    （收起 / 展开 / 重设文字都会走到这里），布局好之后由文案上的 OnLayoutChangeListener 重放位置。
+ *
  * 文案样式（同一个文案控件，同一个 pub.anchor；配置 capOutline / capColor）：
  *  - 找到屏幕上的文案控件时（新视频开始播放、回到前台、文案布局变化如展开），把它的字色设成 capColor（0 = 不动）、
  *    把阴影层设成「半径 3dp、偏移 0、黑色」（= 一圈黑边，和时长 / 发布信息文字的描边感一样）。有变化才设；
@@ -135,17 +145,18 @@ final class PubHook {
     private static final XC_MethodHook BIND_HOOK = new BindHook();
 
     /** 安装阶段找好的 Aweme 字段（回调里只取值）。ip 可以没有。 */
-    private static volatile Field fAid, fTime, fIp, fCity;
+    private static volatile Field fAid, fTime, fIp, fCity, fDesc;
 
     /** 一个视频的发布时间和地点。 */
     private static final class Info {
         final long sec;
-        final String ip, city;
+        final String ip, city, desc;
 
-        Info(long sec, String ip, String city) {
+        Info(long sec, String ip, String city, String desc) {
             this.sec = sec;
             this.ip = ip;
             this.city = city;
+            this.desc = desc;
         }
     }
 
@@ -165,13 +176,19 @@ final class PubHook {
     private static int lastSize;
     private static int lastGx = Integer.MIN_VALUE, lastGy = Integer.MIN_VALUE;
 
+    /** 文案开头比较多少个字符。 */
+    private static final int DESC_CMP = 16;
+    /** 正在播放的视频的 desc（主线程写）；最近 bind 过的视频的 desc 快照（bind 时整个换一份，回调里只读）。 */
+    private static volatile String curDesc;
+    private static volatile String[] DESCS = new String[0];
+
     // 位置锚点（主线程用）
-    private static volatile Class<?> captionCls;
+    private static volatile Class<?> captionCls, capMention;
     private static WeakReference<View> anchorRef = new WeakReference<>(null);
     private static final int[] LOC = new int[2];
     private static final Rect RECT = new Rect();
-    private static View bestV;
-    private static int bestArea;
+    private static View bestMatch, bestAny;
+    private static int areaMatch, areaAny;
     private static final View.OnLayoutChangeListener ANCHOR_LISTENER = new View.OnLayoutChangeListener() {
         @Override
         public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
@@ -193,23 +210,16 @@ final class PubHook {
         tryAnchor(cl, ctx);
     }
 
-    /** pub.anchor：只找视频文案控件的类，不挂钩；找不到就一直用屏幕中心的位置。 */
+    /** pub.anchor：只找视频文案控件的两个类（ScrollMentionTextView 和 MentionTextView），不挂钩；找不到就一直用屏幕中心的位置、不改样式。 */
     private static void tryAnchor(ClassLoader cl, ClassLoader ctx) {
         if (HookGuard.settled(HookGuard.PUB_ANCHOR)) return;
+        Class<?> m = HookGuard.find(HookGuard.PUB_ANCHOR, MENTION, cl, ctx);
+        if (m == null) return;
         Class<?> c = HookGuard.find(HookGuard.PUB_ANCHOR, CAPTION, cl, ctx);
         if (c == null) return;
+        capMention = m;
         captionCls = c;
         HookGuard.ok(HookGuard.PUB_ANCHOR, "");
-    }
-
-    /** pub.text：「展开」文案结尾的日期地点。 */
-    private static void tryText(ClassLoader cl, ClassLoader ctx) {
-        if (HookGuard.settled(HookGuard.PUB)) return;
-        Class<?> mc = HookGuard.find(HookGuard.PUB, MENTION, cl, ctx); // 类没找到：记一次等待，下次回到前台再试
-        if (mc == null) return;
-        mentionCls = mc;
-        HookGuard.hook(HookGuard.PUB, DMT, SET_TEXT, HOOK,
-                "DmtTextView 里没有 setText(CharSequence, BufferType)（抖音改了文字控件，需要重新追踪）", cl, ctx);
     }
 
     /**
@@ -251,12 +261,20 @@ final class PubHook {
         } catch (Throwable ignored) {
             city = null;
         }
+        Field desc = null;
+        try {
+            desc = aw.getDeclaredField("desc");
+            if (desc.getType() != String.class) desc = null;
+        } catch (Throwable ignored) {
+            desc = null;
+        }
         int n = 0;
         try {
             a.setAccessible(true);
             t.setAccessible(true);
             if (ip != null) ip.setAccessible(true);
             if (city != null) city.setAccessible(true);
+            if (desc != null) desc.setAccessible(true);
             for (Method m : vh.getDeclaredMethods()) {
                 if (!m.getName().equals("bind")) continue;
                 Class<?>[] pt = m.getParameterTypes();
@@ -266,6 +284,7 @@ final class PubHook {
                     fTime = t;
                     fIp = ip;
                     fCity = city;
+                    fDesc = desc;
                 }
                 try {
                     XposedBridge.hookMethod(m, BIND_HOOK);
@@ -277,7 +296,7 @@ final class PubHook {
             HookGuard.waitFail(HookGuard.PUB_BIND);
             return;
         }
-        if (n > 0) HookGuard.ok(HookGuard.PUB_BIND, ip == null ? "没有地点字段，只显示日期" : (city == null ? "没有城市字段，只显示到省" : ""));
+        if (n > 0) HookGuard.ok(HookGuard.PUB_BIND, ip == null ? "没有地点字段，只显示日期" : (city == null ? "没有城市字段，只显示到省" : (desc == null ? "没有 desc 字段，文案控件按最大可见面积找" : "")));
         else HookGuard.miss(HookGuard.PUB_BIND, "VideoViewHolder 里没有 bind(Aweme, …)（翻页绑定入口变了，需要重新追踪）");
     }
 
@@ -296,10 +315,16 @@ final class PubHook {
         @Override
         protected void afterHookedMethod(MethodHookParam p) {
             try {
+                Object self = p.thisObject;
+                if (self == null) return;
+                Class<?> sk = self.getClass();
+                if ((sk == capMention || sk == captionCls) && p.args[0] instanceof CharSequence && self instanceof TextView
+                        && (styleOn() || enabled()) && isMain()) {
+                    onCaptionText((TextView) self, (CharSequence) p.args[0]);
+                }
                 if (!enabled()) return;
                 Class<?> k = mentionCls;
-                Object self = p.thisObject;
-                if (k == null || self == null || self.getClass() != k) return; // 只处理 MentionTextView 本身
+                if (k == null || sk != k) return; // 只处理 MentionTextView 本身
                 Object a = p.args[0];
                 if (!(a instanceof CharSequence)) return;
                 final String tail = tail((CharSequence) a);
@@ -350,10 +375,11 @@ final class PubHook {
      * 回调里的取值是反射的 Field 读取（Field 在安装阶段缓存好，每个视频一次，不是每帧）；只在开关开着时才记。
      */
     private static final class BindHook extends XC_MethodHook {
+        // before：文案的 setText 就发生在 bind 里面，desc 要在它之前记下，setText 的钩子才认得出这是哪个视频的文案
         @Override
-        protected void afterHookedMethod(MethodHookParam p) {
+        protected void beforeHookedMethod(MethodHookParam p) {
             try {
-                if (!enabled()) return;
+                if (!enabled() && !styleOn()) return;
                 Field fa = fAid, ft = fTime;
                 Object aw = p.args[0];
                 if (fa == null || ft == null || aw == null) return;
@@ -371,16 +397,65 @@ final class PubHook {
                     Object ip = fi == null ? null : fi.get(aw);
                     Field fc = fCity;
                     Object ct = fc == null ? null : fc.get(aw);
-                    known = new Info(sec, ip instanceof String ? (String) ip : null, ct instanceof String ? (String) ct : null);
+                    Field fd = fDesc;
+                    Object ds = fd == null ? null : fd.get(aw);
+                    known = new Info(sec, ip instanceof String ? (String) ip : null, ct instanceof String ? (String) ct : null,
+                            ds instanceof String && !((String) ds).isEmpty() ? (String) ds : null);
                     synchronized (INFO) {
                         INFO.put(aid, known);
+                        rebuildDescs();
                     }
                 }
                 // onPlaying 比 bind 先到的情况（这个视频已经在播）：补显示；预加载的邻近视频 id 对不上，什么都不做
-                if (isMain() && aid.equals(curId) && !TimePanel.isOpen()) showInfo(known);
+                if (isMain() && aid.equals(curId)) {
+                    if (curDesc == null) curDesc = known.desc;
+                    if (!TimePanel.isOpen()) showInfo(known);
+                }
             } catch (Throwable ignored) {
             }
         }
+    }
+
+    /** INFO 里所有 desc 的快照（INFO 的锁里调用）。 */
+    private static void rebuildDescs() {
+        int n = 0;
+        for (Info i : INFO.values()) if (i.desc != null) n++;
+        String[] d = new String[n];
+        int k = 0;
+        for (Info i : INFO.values()) if (i.desc != null) d[k++] = i.desc;
+        DESCS = d;
+    }
+
+    private static boolean styleOn() {
+        DanmakuConfig c = DanmakuHook.cfg;
+        return c.capOutline || c.capColor != 0;
+    }
+
+    /** 文案文字的开头和 desc 的开头相同（只比前 DESC_CMP 个字符）。 */
+    private static boolean startsWith(CharSequence cs, String desc) {
+        int n = Math.min(desc.length(), DESC_CMP);
+        if (n == 0 || cs.length() < n) return false;
+        for (int i = 0; i < n; i++) if (cs.charAt(i) != desc.charAt(i)) return false;
+        return true;
+    }
+
+    private static boolean matchesAny(CharSequence cs) {
+        String[] d = DESCS;
+        for (int i = 0; i < d.length; i++) if (startsWith(cs, d[i])) return true;
+        return false;
+    }
+
+    /**
+     * 文案控件刚设了文字（DmtTextView#setText 的钩子里，主线程）：是正在播放的视频的文案 → 设样式并当锚点；
+     * 是别的（邻近的）视频的文案 → 只设样式，翻过去时就已经是新样式。认不出是文案的（评论等）什么都不动。
+     */
+    private static void onCaptionText(TextView t, CharSequence cs) {
+        String cur = curDesc;
+        if (cur != null && startsWith(cs, cur)) {
+            adoptAnchor(t);
+            return;
+        }
+        if (styleOn() && matchesAny(cs)) styleCaption(t);
     }
 
     private static void showInfo(Info r) {
@@ -443,13 +518,14 @@ final class PubHook {
     static void onPlay(String id) {
         if (id == null || id.equals(curId)) return;
         curId = id;
+        Info r;
+        synchronized (INFO) {
+            r = INFO.get(id);
+        }
+        curDesc = r == null ? null : r.desc;
         boolean shown = false;
         if (!TimePanel.isOpen()) {
             hideNow();
-            Info r;
-            synchronized (INFO) {
-                r = INFO.get(id);
-            }
             if (r != null && enabled()) {
                 showInfo(r); // show() 里已经找过文案控件并设过样式
                 shown = true;
@@ -462,6 +538,7 @@ final class PubHook {
     static void onStop(String id) {
         if (id == null || !id.equals(curId)) return;
         curId = null;
+        curDesc = null;
         if (!TimePanel.isOpen()) hideNow();
     }
 
@@ -573,18 +650,55 @@ final class PubHook {
         t.setLayoutParams(lp);
     }
 
-    /** 在窗口里找屏幕上可见面积最大的视频文案控件，换了就把布局监听挪过去（每次显示文字时找一次）。 */
+    /**
+     * 在窗口里找当前视频的文案控件：优先文字开头和当前视频 desc 相同的（不要求可见，邻近视频的文案文字不同）；
+     * 当前视频没有 desc 时退而求其次，选屏幕上可见面积最大的非空文案控件。找到了就设样式、把布局监听挪过去。
+     */
     private static void bindAnchor(ViewGroup decor) {
-        View best = null;
-        Class<?> cls = captionCls;
-        if (cls != null) {
-            bestV = null;
-            bestArea = 0;
-            scan(decor, cls);
-            best = bestV;
-            bestV = null;
-        }
+        bestMatch = null;
+        bestAny = null;
+        areaMatch = 0;
+        areaAny = 0;
+        if (capMention != null || captionCls != null) scan(decor);
+        View best = bestMatch != null ? bestMatch : (curDesc == null ? bestAny : null);
+        bestMatch = null;
+        bestAny = null;
         if (best != null) styleCaption(best);
+        setAnchor(best);
+    }
+
+    private static boolean isCaptionView(View v) {
+        if (!(v instanceof TextView)) return false;
+        Class<?> m = capMention, c = captionCls;
+        return (m != null && m.isInstance(v)) || (c != null && c.isInstance(v));
+    }
+
+    private static void scan(View v) {
+        if (v.getVisibility() != View.VISIBLE) return;
+        if (isCaptionView(v)) {
+            TextView t = (TextView) v;
+            if (t.length() > 0) {
+                int area = v.getGlobalVisibleRect(RECT) ? RECT.width() * RECT.height() : 0;
+                String cur = curDesc;
+                if (cur != null && startsWith(t.getText(), cur)) {
+                    if (bestMatch == null || area > areaMatch) {
+                        bestMatch = v;
+                        areaMatch = area;
+                    }
+                } else if (area > areaAny) {
+                    bestAny = v;
+                    areaAny = area;
+                }
+            }
+            return;
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0, n = g.getChildCount(); i < n; i++) scan(g.getChildAt(i));
+        }
+    }
+
+    private static void setAnchor(View best) {
         View old = anchorRef.get();
         if (best == old) return;
         if (old != null) old.removeOnLayoutChangeListener(ANCHOR_LISTENER);
@@ -593,22 +707,12 @@ final class PubHook {
         lastGx = lastGy = Integer.MIN_VALUE; // 锚点变了，下一次 applyOffset 一定重放
     }
 
-    private static void scan(View v, Class<?> cls) {
-        if (v.getVisibility() != View.VISIBLE) return;
-        if (cls.isInstance(v)) {
-            if (v.getGlobalVisibleRect(RECT)) {
-                int area = RECT.width() * RECT.height();
-                if (area > bestArea) {
-                    bestArea = area;
-                    bestV = v;
-                }
-            }
-            return;
-        }
-        if (v instanceof ViewGroup) {
-            ViewGroup g = (ViewGroup) v;
-            for (int i = 0, n = g.getChildCount(); i < n; i++) scan(g.getChildAt(i), cls);
-        }
+    /** setText 钩子里认出了当前视频的文案：直接当锚点（这时还没布局，布局好之后监听会重放位置）。 */
+    private static void adoptAnchor(TextView t) {
+        styleCaption(t);
+        setAnchor(t);
+        TextView tv = viewRef.get();
+        if (tv != null && tv.getParent() != null) applyOffset(tv);
     }
 
     /** 视频文案的字色和黑边（只有这两项里有开着的才动；有变化才设，布局变化时反复调用也没有开销）。 */
