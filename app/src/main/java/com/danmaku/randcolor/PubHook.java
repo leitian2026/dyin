@@ -1,6 +1,7 @@
 package com.danmaku.randcolor;
 
 import android.app.Activity;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
@@ -51,6 +52,19 @@ import de.robv.android.xposed.XposedBridge;
  *    字段在安装阶段按名字找好并缓存（找不到 aid / createTime 就 miss，不猜）；回调里只做取值。
  *  - city 是代码不是名字，转城市名靠下面的 CITIES 表（只有 4 位地级代码；查不到就只显示省）。
  *
+ * 位置（钩子 pub.anchor，不挂钩，只找类）：
+ *  - 视频文案是 com.ss.android.ugc.aweme.feed.desc.ui.ScrollMentionTextView（id 2131369754；textrec-tasks-20261020-150752 /
+ *    143514 的 SETTEXT 记录里，它的文字就是视频文案，类名没混淆）。
+ *  - 显示文字时在窗口里找屏幕上可见面积最大的那个 ScrollMentionTextView（翻页预加载的邻近视频在屏幕外，可见面积是 0），
+ *    文字放在它的左下角：x = 文案左边 + pubX，y = 文案下边 + pubY。文案变长 / 点「展开」导致文案布局变化时，
+ *    由挂在文案上的 OnLayoutChangeListener 把文字重新放一次（事件触发，没有定时器）。
+ *  - 找不到类或屏幕上没有文案控件时，退回以前的位置：屏幕中心 + (pubX, pubY)。
+ *
+ * 文案样式（同一个文案控件，同一个 pub.anchor；配置 capOutline / capColor）：
+ *  - 找到屏幕上的文案控件时（新视频开始播放、回到前台、文案布局变化如展开），把它的字色设成 capColor（0 = 不动）、
+ *    把阴影层设成「半径 3dp、偏移 0、黑色」（= 一圈黑边，和时长 / 发布信息文字的描边感一样）。有变化才设；
+ *    话题、@ 这类带 span 的文字保持抖音自己的颜色。关掉功能后不会恢复原样（不知道抖音原来的值），要重启抖音。
+ *
  * 没有定时器 / 轮询：文字只在上面的回调里更新或隐藏。
  */
 final class PubHook {
@@ -59,6 +73,7 @@ final class PubHook {
     /** 版本相关（40.7.0）。 */
     private static final String DMT = "com.bytedance.ies.dmt.ui.widget.DmtTextView";
     private static final String MENTION = "com.ss.android.ugc.aweme.views.MentionTextView";
+    private static final String CAPTION = "com.ss.android.ugc.aweme.feed.desc.ui.ScrollMentionTextView";
     private static final String PLACEHOLDER = "2026-10-19 11:50:00 广西 南宁";
     /** 结尾「日期 地点」最多看多少个字符。 */
     private static final int MAX_TAIL = 40;
@@ -146,7 +161,26 @@ final class PubHook {
     // 状态（都在主线程用）
     private static String curId;
     private static String lastText = "";
-    private static int lastDx = Integer.MIN_VALUE, lastDy = Integer.MIN_VALUE;
+    private static boolean lastAnch;
+    private static int lastSize;
+    private static int lastGx = Integer.MIN_VALUE, lastGy = Integer.MIN_VALUE;
+
+    // 位置锚点（主线程用）
+    private static volatile Class<?> captionCls;
+    private static WeakReference<View> anchorRef = new WeakReference<>(null);
+    private static final int[] LOC = new int[2];
+    private static final Rect RECT = new Rect();
+    private static View bestV;
+    private static int bestArea;
+    private static final View.OnLayoutChangeListener ANCHOR_LISTENER = new View.OnLayoutChangeListener() {
+        @Override
+        public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+            if (l == ol && t == ot && r == or && b == ob) return;
+            styleCaption(v);
+            TextView tv = viewRef.get();
+            if (tv != null && tv.getParent() != null) applyOffset(tv);
+        }
+    };
 
     // ------------------------------------------------------------ 安装
 
@@ -156,6 +190,16 @@ final class PubHook {
         ClassLoader ctx = Thread.currentThread().getContextClassLoader();
         tryText(cl, ctx);
         tryBind(cl, ctx);
+        tryAnchor(cl, ctx);
+    }
+
+    /** pub.anchor：只找视频文案控件的类，不挂钩；找不到就一直用屏幕中心的位置。 */
+    private static void tryAnchor(ClassLoader cl, ClassLoader ctx) {
+        if (HookGuard.settled(HookGuard.PUB_ANCHOR)) return;
+        Class<?> c = HookGuard.find(HookGuard.PUB_ANCHOR, CAPTION, cl, ctx);
+        if (c == null) return;
+        captionCls = c;
+        HookGuard.ok(HookGuard.PUB_ANCHOR, "");
     }
 
     /** pub.text：「展开」文案结尾的日期地点。 */
@@ -399,13 +443,19 @@ final class PubHook {
     static void onPlay(String id) {
         if (id == null || id.equals(curId)) return;
         curId = id;
-        if (TimePanel.isOpen()) return;
-        hideNow();
-        Info r;
-        synchronized (INFO) {
-            r = INFO.get(id);
+        boolean shown = false;
+        if (!TimePanel.isOpen()) {
+            hideNow();
+            Info r;
+            synchronized (INFO) {
+                r = INFO.get(id);
+            }
+            if (r != null && enabled()) {
+                showInfo(r); // show() 里已经找过文案控件并设过样式
+                shown = true;
+            }
         }
-        if (r != null) showInfo(r);
+        if (!shown) refreshCaption(CommentHook.top.get());
     }
 
     /** 离开这个视频（划走 / 播放器释放）：别的视频迟到的事件不动当前文字。 */
@@ -432,12 +482,12 @@ final class PubHook {
         ViewGroup decor = (ViewGroup) a.getWindow().getDecorView();
         float d = a.getResources().getDisplayMetrics().density;
         if (t != null && t.getContext() != a) { // 换了 Activity：旧的拿掉重建
+            clearAnchor();
             detach(t);
             t = null;
         }
         if (t == null) {
             t = new TextView(a);
-            t.setTextSize(16f);
             t.setTypeface(Typeface.DEFAULT_BOLD);
             t.setTextColor(0xFFFFFFFF);
             t.setShadowLayer(5f * d, 0f, 0f, 0xFF000000); // 黑色描边感，亮暗背景都看得清
@@ -447,13 +497,15 @@ final class PubHook {
             t.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             viewRef = new WeakReference<>(t);
             lastText = "";
-            lastDx = lastDy = Integer.MIN_VALUE;
+            lastGx = lastGy = Integer.MIN_VALUE;
+            lastSize = 0;
         }
         View panel = TimePanel.view();
         boolean moved = false;
         if (t.getParent() != decor) {
             detach(t);
             decor.addView(t, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+            lastGx = lastGy = Integer.MIN_VALUE; // 新的布局参数，下一次 applyOffset 一定重放
             moved = true;
         } else {
             View last = decor.getChildAt(decor.getChildCount() - 1);
@@ -463,6 +515,8 @@ final class PubHook {
             }
         }
         if (moved && panel != null && panel.getParent() == decor) panel.bringToFront(); // 浮窗始终压在文字上面
+        bindAnchor(decor);
+        applySize(t);
         applyOffset(t);
         if (!text.equals(lastText)) {
             lastText = text;
@@ -471,13 +525,118 @@ final class PubHook {
         if (t.getVisibility() != View.VISIBLE) t.setVisibility(View.VISIBLE);
     }
 
+    /** 字号（sp）：有变化才设。 */
+    private static void applySize(TextView t) {
+        int sz = DanmakuHook.cfg.pubSize;
+        if (sz == lastSize) return;
+        lastSize = sz;
+        t.setTextSize(sz);
+    }
+
+    /** 位置浮窗里点 − / + 或拖字号滑动条时实时生效。 */
+    static void applySizeNow() {
+        TextView t = viewRef.get();
+        if (t != null) applySize(t);
+    }
+
+    /** 有文案锚点：放在文案左下角 + (pubX, pubY)（窗口坐标，用 margin）；没有：屏幕中心 + (pubX, pubY)（用 translation）。 */
     private static void applyOffset(TextView t) {
         DanmakuConfig c = DanmakuHook.cfg;
-        if (c.pubX == lastDx && c.pubY == lastDy) return;
-        lastDx = c.pubX;
-        lastDy = c.pubY;
-        t.setTranslationX(c.pubX);
-        t.setTranslationY(c.pubY);
+        View an = anchorRef.get();
+        boolean anch = an != null && an.isAttachedToWindow() && an.getVisibility() == View.VISIBLE;
+        int gx = c.pubX, gy = c.pubY;
+        if (anch) {
+            an.getLocationInWindow(LOC);
+            gx += LOC[0] + an.getPaddingLeft();
+            gy += LOC[1] + an.getHeight();
+        }
+        if (anch == lastAnch && gx == lastGx && gy == lastGy) return;
+        ViewGroup.LayoutParams p = t.getLayoutParams();
+        if (!(p instanceof FrameLayout.LayoutParams)) return;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) p;
+        lastAnch = anch;
+        lastGx = gx;
+        lastGy = gy;
+        if (anch) {
+            lp.gravity = Gravity.TOP | Gravity.LEFT;
+            lp.leftMargin = gx;
+            lp.topMargin = gy;
+            t.setTranslationX(0f);
+            t.setTranslationY(0f);
+        } else {
+            lp.gravity = Gravity.CENTER;
+            lp.leftMargin = 0;
+            lp.topMargin = 0;
+            t.setTranslationX(gx);
+            t.setTranslationY(gy);
+        }
+        t.setLayoutParams(lp);
+    }
+
+    /** 在窗口里找屏幕上可见面积最大的视频文案控件，换了就把布局监听挪过去（每次显示文字时找一次）。 */
+    private static void bindAnchor(ViewGroup decor) {
+        View best = null;
+        Class<?> cls = captionCls;
+        if (cls != null) {
+            bestV = null;
+            bestArea = 0;
+            scan(decor, cls);
+            best = bestV;
+            bestV = null;
+        }
+        if (best != null) styleCaption(best);
+        View old = anchorRef.get();
+        if (best == old) return;
+        if (old != null) old.removeOnLayoutChangeListener(ANCHOR_LISTENER);
+        anchorRef = new WeakReference<>(best);
+        if (best != null) best.addOnLayoutChangeListener(ANCHOR_LISTENER);
+        lastGx = lastGy = Integer.MIN_VALUE; // 锚点变了，下一次 applyOffset 一定重放
+    }
+
+    private static void scan(View v, Class<?> cls) {
+        if (v.getVisibility() != View.VISIBLE) return;
+        if (cls.isInstance(v)) {
+            if (v.getGlobalVisibleRect(RECT)) {
+                int area = RECT.width() * RECT.height();
+                if (area > bestArea) {
+                    bestArea = area;
+                    bestV = v;
+                }
+            }
+            return;
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0, n = g.getChildCount(); i < n; i++) scan(g.getChildAt(i), cls);
+        }
+    }
+
+    /** 视频文案的字色和黑边（只有这两项里有开着的才动；有变化才设，布局变化时反复调用也没有开销）。 */
+    private static void styleCaption(View v) {
+        DanmakuConfig c = DanmakuHook.cfg;
+        if (!c.capOutline && c.capColor == 0) return;
+        if (!(v instanceof TextView)) return;
+        TextView t = (TextView) v;
+        if (c.capColor != 0 && t.getCurrentTextColor() != c.capColor) t.setTextColor(c.capColor);
+        if (c.capOutline) {
+            float r = 3f * t.getResources().getDisplayMetrics().density;
+            if (t.getShadowRadius() != r) t.setShadowLayer(r, 0f, 0f, 0xFF000000);
+        }
+    }
+
+    /** 没有在显示发布信息、只开了文案样式时：新视频开始播放 / 回到前台时找一次文案控件并设样式。 */
+    private static void refreshCaption(Activity a) {
+        DanmakuConfig c = DanmakuHook.cfg;
+        if (!c.capOutline && c.capColor == 0) return;
+        if (!isHostActivity(a)) return;
+        bindAnchor((ViewGroup) a.getWindow().getDecorView());
+    }
+
+    private static void clearAnchor() {
+        View old = anchorRef.get();
+        if (old != null) old.removeOnLayoutChangeListener(ANCHOR_LISTENER);
+        anchorRef = new WeakReference<>(null);
+        lastGx = lastGy = Integer.MIN_VALUE;
     }
 
     /** 位置浮窗拖动时实时生效。 */
@@ -516,12 +675,14 @@ final class PubHook {
                 DanmakuHook.saveCfg();
                 TimePanel.open(a, TimePanel.PUB);
             }
+            refreshCaption(a);
             TextView t = viewRef.get();
             if (t == null) return;
             if (!enabled() || !isHostActivity(a) || t.getContext() != a) {
                 removeView();
                 return;
             }
+            applySize(t);
             applyOffset(t);
         } catch (Throwable ignored) {
         }
