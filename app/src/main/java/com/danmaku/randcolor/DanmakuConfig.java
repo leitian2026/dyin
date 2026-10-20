@@ -25,7 +25,14 @@ public final class DanmakuConfig {
     /** 发布日期和地点一直显示（自己画一行「3天前 北京」）。 */
     public boolean pubAlways = false;
     /** 发布信息文字相对屏幕正中的偏移，单位 px。右、下为正。默认在时长文字下面一点。 */
-    public int pubX = 0, pubY = 90;
+    public int pubX = 0, pubY = 0;
+    /** 时长文字 / 发布信息文字的字号，单位 sp（位置浮窗里的 − / + 每点一下增减 1）。默认 = 以前写死的 20 / 16。 */
+    public int timeSize = 20, pubSize = 16;
+    /** 视频文案加黑色描边（用阴影层画一圈黑边）。关掉后要重启抖音才恢复。 */
+    public boolean capOutline = false;
+    /** 视频文案的颜色（0xAARRGGBB，不透明）；0 = 不改，用抖音原来的颜色。话题、@ 这类抖音自己上色的文字不受影响。 */
+    public int capColor = 0;
+    public static final int SIZE_MIN = 8, SIZE_MAX = 40;
     /** 首页顶部标签行里要隐藏的标签（"热点"、"同城"……），取消勾选后要重启抖音才恢复显示。 */
     public String[] hiddenTabs = new String[0];
     /** 无操作多少分钟后结束抖音进程；0 = 关闭。回到前台、触摸、按键都算一次操作。 */
@@ -50,6 +57,10 @@ public final class DanmakuConfig {
             p.setProperty("pubX", String.valueOf(pubX));
             p.setProperty("pubY", String.valueOf(pubY));
             p.setProperty("pubAdjust", String.valueOf(pubAdjust));
+            p.setProperty("timeSize", String.valueOf(timeSize));
+            p.setProperty("pubSize", String.valueOf(pubSize));
+            p.setProperty("capOutline", String.valueOf(capOutline));
+            p.setProperty("capColor", String.valueOf(capColor));
             p.setProperty("idleExitMin", String.valueOf(idleExitMin));
             StringBuilder sb = new StringBuilder();
             for (String s : hiddenTabs) sb.append(sb.length() == 0 ? "" : ",").append(s);
@@ -95,8 +106,17 @@ public final class DanmakuConfig {
         c.timeAdjust = Boolean.parseBoolean(p.getProperty("timeAdjust", "false").trim());
         c.pubAlways = Boolean.parseBoolean(p.getProperty("pubAlways", "false").trim());
         c.pubX = parseOffset(p.getProperty("pubX", "0"));
-        c.pubY = parseOffset(p.getProperty("pubY", "90"));
+        c.pubY = parseOffset(p.getProperty("pubY", "0"));
         c.pubAdjust = Boolean.parseBoolean(p.getProperty("pubAdjust", "false").trim());
+        c.timeSize = parseSize(p.getProperty("timeSize", "20"), 20);
+        c.pubSize = parseSize(p.getProperty("pubSize", "16"), 16);
+        c.capOutline = Boolean.parseBoolean(p.getProperty("capOutline", "false").trim());
+        try {
+            int col = (int) Long.parseLong(p.getProperty("capColor", "0").trim());
+            c.capColor = col == 0 ? 0 : (col | 0xFF000000);
+        } catch (Throwable t) {
+            c.capColor = 0;
+        }
         List<String> tabs = split(p.getProperty("hiddenTabs", ""));
         c.hiddenTabs = tabs.toArray(new String[0]);
         try {
@@ -108,6 +128,14 @@ public final class DanmakuConfig {
             c.mode = Integer.parseInt(p.getProperty("mode", "0").trim()) == 1 ? 1 : 0;
         } catch (Throwable t) {
             c.mode = 0;
+        }
+    }
+
+    private static int parseSize(String v, int def) {
+        try {
+            return Math.max(SIZE_MIN, Math.min(SIZE_MAX, Integer.parseInt(v.trim())));
+        } catch (Throwable t) {
+            return def;
         }
     }
 
