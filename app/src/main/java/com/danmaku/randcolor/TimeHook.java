@@ -58,6 +58,7 @@ final class TimeHook {
     private static long lastSec = -1, lastDsec = -2, staleUntil;
     private static String lastText = "";
     private static int lastDx = Integer.MIN_VALUE, lastDy = Integer.MIN_VALUE;
+    private static int lastSize;
     private static boolean shown;
 
     // ------------------------------------------------------------ 安装
@@ -254,7 +255,6 @@ final class TimeHook {
         }
         if (t == null) {
             t = new TextView(a);
-            t.setTextSize(20f);
             t.setTypeface(Typeface.DEFAULT_BOLD);
             t.setTextColor(0xFFFFFFFF);
             t.setShadowLayer(5f * d, 0f, 0f, 0xFF000000); // 黑色描边感，亮暗背景都看得清
@@ -269,6 +269,7 @@ final class TimeHook {
             viewRef = new WeakReference<>(t);
             lastText = "";
             lastDx = lastDy = Integer.MIN_VALUE;
+            lastSize = 0;
         }
         View panel = TimePanel.view();
         boolean moved = false;
@@ -284,6 +285,7 @@ final class TimeHook {
             }
         }
         if (moved && panel != null && panel.getParent() == decor) panel.bringToFront(); // 浮窗始终压在文字上面
+        applySize(t);
         applyOffset(t);
         if (!text.equals(lastText)) {
             lastText = text;
@@ -306,6 +308,20 @@ final class TimeHook {
     static void applyOffsetNow() {
         TextView t = viewRef.get();
         if (t != null) applyOffset(t);
+    }
+
+    /** 字号（sp）：有变化才设。 */
+    private static void applySize(TextView t) {
+        int s = DanmakuHook.cfg.timeSize;
+        if (s == lastSize) return;
+        lastSize = s;
+        t.setTextSize(s);
+    }
+
+    /** 位置浮窗里点 − / + 或拖字号滑动条时实时生效。 */
+    static void applySizeNow() {
+        TextView t = viewRef.get();
+        if (t != null) applySize(t);
     }
 
     /** 立刻隐藏；下一次进度回调（或 onPlaying）会重新显示。 */
@@ -351,6 +367,7 @@ final class TimeHook {
                 removeView();
                 return;
             }
+            applySize(t);
             applyOffset(t);
         } catch (Throwable ignored) {
         }
