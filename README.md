@@ -10,7 +10,7 @@
 
 6. **首页顶部标签隐藏**（1.17.9）：设置页里列出标签行的 13 个标签，勾选哪个就隐藏哪个。
 
-7. **发布日期和地点常显**（1.18.0）：自己画一行 `3天前 北京` / `10月10日 江西`，位置和视频时长一样用抖音里的浮窗调整。数据取自点「展开」后的完整文案结尾，所以每个视频要先点一次「展开」才有。
+7. **发布日期和地点常显**（1.18.0）：自己画一行 `3天前 北京` / `10月10日 江西`，位置和视频时长一样用抖音里的浮窗调整。1.18.1 起数据取自视频本身（`Aweme` 的发布时间和 IP 属地），不用再点「展开」；点「展开」时抖音页面自己的文字仍会覆盖显示。
 
 ## 开发规范
 新增钩子 / 新功能前先读 [`HOOKS.md`](HOOKS.md)（钩子自检的 6 步和硬性规则）；AI 助手的入口是 [`AGENTS.md`](AGENTS.md)。
@@ -21,6 +21,14 @@
 ## 使用
 1. LSPosed 启用模块，作用域勾选抖音，强杀抖音重开。
 2. 打开模块设置，点「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
+
+## 1.18.1：发布日期和地点不用再点「展开」
+- 新增钩子 `pub.bind`（`HookGuard` 编号 9；挂在 `PubHook.tryHook` 里，它本来就在 `DanmakuHook.init` 和 `hookResume` 两处调用；设置页名字「发布日期地点：视频数据」）。原来的 `pub.text`（展开文案）保留。
+- **依据**（TextRec，抖音 40.7.0，`textrec-tasks-20261020-143514`）：`VideoViewHolder#bind(Aweme)` / `bind(Aweme, int)` 是翻页绑定入口，`ForwardFeedReversionVideoViewHolder` 和 `PlayletVideoViewHolder` 的 bind 都经过它；参数 `Aweme` 的 `aid` 和播放器 `onPlaying` 的第一个参数（也是 `PlayerEvent` 的 id）是同一个字符串，三个视频逐个对上。bind 是预加载触发的（36874ms 邻近视频 `7696206519011937599` 先 bind，36892ms 的 `onPlaying` 还是上一个视频，之后也没播过它），所以不能用「最后一次 bind」当当前视频。
+- **怎么做**：bind 时按 `aid` 记下 `createTime`（秒）和 `ipAttribution`，最多 48 个（LRU）；已经记过的 `aid` 跳过；`onPlaying` 经 `TimeHook` 转进来的 `PubHook.onPlay(id)` 再按 id 查出来显示，查不到就什么都不显示；如果 `onPlaying` 比 bind 先到，bind 时发现 `aid` 等于当前视频再补显示。换视频 / 离开的撤掉逻辑不变。
+- **怎么匹配**：`VideoViewHolder` 里第一个参数是 `Aweme` 的 `bind` 全挂（类没找到走 `waitFail`；`Aweme` 里没有 `aid` / `createTime` 字段、字段类型不对、没有 `bind(Aweme…)` 走 `miss`，原因写明要重新追踪什么）。`Field` 在安装阶段按名字找好并缓存；`ipAttribution` 没有就只显示日期。
+- **「N天前」的算法**：只拿到时间戳，自己换算：<1 分钟「刚刚」，<1 小时「N分钟前」，<24 小时「N小时前」，<7 天「N天前」，再早「M月D日」（跨年「YYYY年M月D日」）。按经过的时间算，边界和抖音页面可能差一点。
+- **局限**：①规范有一点出入：bind 回调里读字段是反射的 `Field.get` / `getLong`（`Field` 缓存好了，每个视频一次，不是每帧），已记过的视频直接跳过；记新视频时有一个 `Info` 对象分配；②开关没开时 bind 不记，中途打开开关要等下一个视频才有；③依赖 `time.playing`（和 `time.stop`）挂上；没挂上时 `onPlay` 不会被调到，文字安静地不显示；④`Aweme` 的 `createTime` / `ipAttribution` 字段名来自 TextRec 字段快照的导出，这个仓库和 `143514` 那份导出里没有这两个名字，`aid` 有（`Aweme{aid='…'}`）；字段名不对时 `pub.bind` 会 `miss`，设置页显示未适配；⑤没有在真机上验证。
 
 ## 1.18.0：发布日期和地点常显
 - 新增 `PubHook` 和钩子 `pub.text`（已登记到 `HookGuard` 编号 8 / `DanmakuHook.init` / `hookResume` / `MainActivity.HOOK_NAMES`）。
@@ -147,4 +155,5 @@
 - `CommentHook.DIGG_CLICK_METHOD`（`LJJJJJL`）：爱心按钮点击入口。
 - `BaseListFragmentPanel#LLLIILIL(MotionEvent)`：双击的统一入口（红心和点赞都在它下面）。
 - 评论按钮靠 contentDescription「评论N，按钮」查找。
+- `PubHook.HOLDER` / `PubHook.AWEME`：发布日期地点（`pub.bind`）用到的 `VideoViewHolder#bind(Aweme…)` 和 `Aweme` 的 `aid` / `createTime` / `ipAttribution` 字段名。
 - `PubHook.DMT` / `PubHook.MENTION`：发布日期地点用到的文字控件类名（`DmtTextView#setText(CharSequence, BufferType)`、`MentionTextView`），以及文案结尾「4 个空格 + 日期 + 空格 + 地点」的格式。
