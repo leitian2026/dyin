@@ -22,12 +22,18 @@ public final class DanmakuConfig {
     public boolean timeAlways = false;
     /** 时长文字相对屏幕正中的偏移，单位 px。右、下为正。（1.16 起由 dp 改为 px，键名也换了，旧值不再使用） */
     public int timeX = 0, timeY = 0;
+    /** 发布日期和地点一直显示（自己画一行「3天前 北京」）。 */
+    public boolean pubAlways = false;
+    /** 发布信息文字相对屏幕正中的偏移，单位 px。右、下为正。默认在时长文字下面一点。 */
+    public int pubX = 0, pubY = 90;
     /** 首页顶部标签行里要隐藏的标签（"热点"、"同城"……），取消勾选后要重启抖音才恢复显示。 */
     public String[] hiddenTabs = new String[0];
     /** 无操作多少分钟后结束抖音进程；0 = 关闭。回到前台、触摸、按键都算一次操作。 */
     public int idleExitMin = 0;
     /** 一次性请求：抖音回到前台时弹出「位置浮窗」，弹出后立即被抖音清掉。 */
     public boolean timeAdjust = false;
+    /** 一次性请求：抖音回到前台时弹出「发布信息位置浮窗」，弹出后立即被抖音清掉。 */
+    public boolean pubAdjust = false;
 
     public String toText() {
         try {
@@ -40,6 +46,10 @@ public final class DanmakuConfig {
             p.setProperty("timeX", String.valueOf(timeX));
             p.setProperty("timeY", String.valueOf(timeY));
             p.setProperty("timeAdjust", String.valueOf(timeAdjust));
+            p.setProperty("pubAlways", String.valueOf(pubAlways));
+            p.setProperty("pubX", String.valueOf(pubX));
+            p.setProperty("pubY", String.valueOf(pubY));
+            p.setProperty("pubAdjust", String.valueOf(pubAdjust));
             p.setProperty("idleExitMin", String.valueOf(idleExitMin));
             StringBuilder sb = new StringBuilder();
             for (String s : hiddenTabs) sb.append(sb.length() == 0 ? "" : ",").append(s);
@@ -83,6 +93,10 @@ public final class DanmakuConfig {
         c.timeX = parseOffset(p.getProperty("timeX", "0"));
         c.timeY = parseOffset(p.getProperty("timeY", "0"));
         c.timeAdjust = Boolean.parseBoolean(p.getProperty("timeAdjust", "false").trim());
+        c.pubAlways = Boolean.parseBoolean(p.getProperty("pubAlways", "false").trim());
+        c.pubX = parseOffset(p.getProperty("pubX", "0"));
+        c.pubY = parseOffset(p.getProperty("pubY", "90"));
+        c.pubAdjust = Boolean.parseBoolean(p.getProperty("pubAdjust", "false").trim());
         List<String> tabs = split(p.getProperty("hiddenTabs", ""));
         c.hiddenTabs = tabs.toArray(new String[0]);
         try {
