@@ -17,10 +17,11 @@ import android.widget.TextView;
 import java.lang.ref.WeakReference;
 
 /**
- * 位置浮窗：画在抖音当前界面的最上层，用来调时长文字（或发布日期地点文字）的位置，改动实时可见。同一个浮窗，
+ * 位置浮窗：画在抖音当前界面的最上层，用来调时长文字（或发布日期地点文字）的位置和字号，改动实时可见。同一个浮窗，
  * 调哪一个由 target 决定（TIME / PUB）。
- *  - 两条滑动条（水平 / 垂直），左端是减、右端是加；范围是半个屏幕，0 在正中。
- *  - 两端的 − / + 每点一下移动 2 像素。
+ *  - 三条滑动条（水平 / 垂直 / 字号），左端是减、右端是加。位置：范围是半个屏幕，0 在正中（发布信息有文案锚点时 0 = 文案左下角）；
+ *    字号：8～40 sp。
+ *  - 两端的 − / + 每点一下：位置移动 2 像素，字号增减 1 号（1 sp）。「归零」只归位置，不动字号。
  *  - 标题栏可以拖动，浮窗挡住文字时把它拖开。
  *  - 松手（滑动条 / 按钮）时写回配置文件；点「完成」写回并关闭。
  * 由模块设置页的「打开浮窗调整位置」触发（推送 timeAdjust=true / pubAdjust=true 后启动抖音）。
@@ -37,7 +38,7 @@ final class TimePanel {
     private static WeakReference<View> panelRef = new WeakReference<>(null);
     private static boolean open;
     private static float dragX, dragY; // 浮窗自己被拖到的位置，换界面重建时保留
-    private static Axis axX, axY;
+    private static Axis axX, axY, axS;
 
     static boolean isOpen() {
         return open;
@@ -88,7 +89,7 @@ final class TimePanel {
         View p = panelRef.get();
         if (p != null && p.getParent() instanceof ViewGroup) ((ViewGroup) p.getParent()).removeView(p);
         panelRef = new WeakReference<>(null);
-        axX = axY = null;
+        axX = axY = axS = null;
         if (target == PUB) PubHook.onPanelClosed();
         else TimeHook.onPanelClosed();
     }
@@ -149,6 +150,8 @@ final class TimePanel {
         axY = new Axis(false, dm.heightPixels / 2);
         box.addView(row(a, "水平（左 − ／ 右 +）", axX));
         box.addView(row(a, "垂直（上 − ／ 下 +）", axY));
+        axS = Axis.size();
+        box.addView(row(a, "字号（小 − ／ 大 +，每点一下 1 号）", axS));
         return box;
     }
 
@@ -170,8 +173,8 @@ final class TimePanel {
         bar.addView(stepBtn(a, "−", ax, -1), new LinearLayout.LayoutParams(dp(a, 44), dp(a, 40)));
 
         SeekBar sb = new SeekBar(a);
-        sb.setMax(ax.range * 2);
-        sb.setProgress(Math.max(0, Math.min(ax.range * 2, ax.get() + ax.range)));
+        sb.setMax(ax.hi() - ax.lo());
+        sb.setProgress(Math.max(0, Math.min(ax.hi() - ax.lo(), ax.get() - ax.lo())));
         try {
             sb.setThumbTintList(ColorStateList.valueOf(0xFF8FA4FF));
             sb.setProgressTintList(ColorStateList.valueOf(0xFF6C85F5));
@@ -182,7 +185,7 @@ final class TimePanel {
         sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
-                if (fromUser) fax.set(p - fax.range, true);
+                if (fromUser) fax.set(p + fax.lo(), true);
             }
 
             @Override
@@ -202,7 +205,7 @@ final class TimePanel {
         return col;
     }
 
-    /** − / + 按钮：每点一下走 2 像素，松手落盘。没有定时器 / 长按连发，大幅度的移动用滑动条。 */
+    /** − / + 按钮：每点一下走一步（位置 2 像素 / 字号 1 号），松手落盘。没有定时器 / 长按连发，大幅度的变化用滑动条。 */
     private static TextView stepBtn(Activity a, String label, final Axis ax, final int dir) {
         TextView t = txt(a, label, 22, 0xFFFFFFFF, true);
         t.setGravity(Gravity.CENTER);
@@ -212,7 +215,7 @@ final class TimePanel {
                 case MotionEvent.ACTION_DOWN:
                     if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(true);
                     v.setPressed(true);
-                    ax.set(ax.get() + dir * STEP_PX, false);
+                    ax.set(ax.get() + dir * ax.step(), false);
                     return true;
                 case MotionEvent.ACTION_UP:
                     DanmakuHook.saveCfg();
@@ -228,43 +231,79 @@ final class TimePanel {
         return t;
     }
 
-    /** 一个方向的数值：读写配置、同步滑动条和数字、实时移动文字（落盘由调用方在松手时做）。 */
+    /** 一条滑动条的数值：水平 / 垂直位置（像素，0 在正中）或字号（sp）；读写配置、同步滑动条和数字、实时生效（落盘由调用方在松手时做）。 */
     private static final class Axis {
         final boolean horiz;
+        final boolean size;
         final int range;
         SeekBar sb;
         TextView val;
 
         Axis(boolean horiz, int range) {
             this.horiz = horiz;
+            this.size = false;
             this.range = Math.max(1, range);
+        }
+
+        private Axis() {
+            this.horiz = false;
+            this.size = true;
+            this.range = 1;
+        }
+
+        static Axis size() {
+            return new Axis();
+        }
+
+        int lo() {
+            return size ? DanmakuConfig.SIZE_MIN : -range;
+        }
+
+        int hi() {
+            return size ? DanmakuConfig.SIZE_MAX : range;
+        }
+
+        int step() {
+            return size ? 1 : STEP_PX;
         }
 
         int get() {
             DanmakuConfig c = DanmakuHook.cfg;
+            if (size) return target == PUB ? c.pubSize : c.timeSize;
             if (target == PUB) return horiz ? c.pubX : c.pubY;
             return horiz ? c.timeX : c.timeY;
         }
 
         void set(int v, boolean fromSlider) {
-            v = Math.max(-range, Math.min(range, v));
+            v = Math.max(lo(), Math.min(hi(), v));
             DanmakuConfig c = DanmakuHook.cfg;
-            if (target == PUB) {
+            if (size) {
+                if (target == PUB) c.pubSize = v;
+                else c.timeSize = v;
+            } else if (target == PUB) {
                 if (horiz) c.pubX = v;
                 else c.pubY = v;
             } else {
                 if (horiz) c.timeX = v;
                 else c.timeY = v;
             }
-            if (!fromSlider && sb != null) sb.setProgress(v + range); // fromUser=false，不会回调到 set
+            if (!fromSlider && sb != null) sb.setProgress(v - lo()); // fromUser=false，不会回调到 set
             refresh();
-            if (target == PUB) PubHook.applyOffsetNow();
-            else TimeHook.applyOffsetNow();
+            if (size) {
+                if (target == PUB) PubHook.applySizeNow();
+                else TimeHook.applySizeNow();
+            } else if (target == PUB) {
+                PubHook.applyOffsetNow();
+            } else {
+                TimeHook.applyOffsetNow();
+            }
         }
 
         void refresh() {
             int v = get();
-            if (val != null) val.setText((v > 0 ? "+" : "") + v + " px");
+            if (val == null) return;
+            if (size) val.setText(v + " sp");
+            else val.setText((v > 0 ? "+" : "") + v + " px");
         }
     }
 
