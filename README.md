@@ -1,4 +1,4 @@
-# dyin（DanmakuColor）— 抖音弹幕随机色 + 点赞改打开评论 + 视频时长常显（LSPosed 模块）
+# dyin（DanmakuColor）— 抖音弹幕随机色 + 点赞改打开评论 + 视频时长常显 + 发布日期地点常显（LSPosed 模块）
 
 ## 功能
 1. **弹幕随机色**：每条弹幕随机颜色，保留黑色描边。
@@ -10,6 +10,8 @@
 
 6. **首页顶部标签隐藏**（1.17.9）：设置页里列出标签行的 13 个标签，勾选哪个就隐藏哪个。
 
+7. **发布日期和地点常显**（1.18.0）：自己画一行 `3天前 北京` / `10月10日 江西`，位置和视频时长一样用抖音里的浮窗调整。数据取自点「展开」后的完整文案结尾，所以每个视频要先点一次「展开」才有。
+
 ## 开发规范
 新增钩子 / 新功能前先读 [`HOOKS.md`](HOOKS.md)（钩子自检的 6 步和硬性规则）；AI 助手的入口是 [`AGENTS.md`](AGENTS.md)。
 
@@ -19,6 +21,16 @@
 ## 使用
 1. LSPosed 启用模块，作用域勾选抖音，强杀抖音重开。
 2. 打开模块设置，点「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
+
+## 1.18.0：发布日期和地点常显
+- 新增 `PubHook` 和钩子 `pub.text`（已登记到 `HookGuard` 编号 8 / `DanmakuHook.init` / `hookResume` / `MainActivity.HOOK_NAMES`）。
+- **依据**（TextRec，抖音 40.7.0，`textrec-tasks-20261020-084058` 的 #424）：点文案末尾「展开」时，`com.ss.android.ugc.aweme.views.MentionTextView`（id `g=q`，页面 `UltraDetailActivity > C2FeedFragment`）被设置成完整文案，结尾是「4 个空格 + 日期 + 空格 + 地点」，例如 `…#历史剧解说    3天前 北京`；没有地点的视频结尾只有日期。设置侧的稳定钩点是 `com.bytedance.ies.dmt.ui.widget.DmtTextView#setText(CharSequence, TextView$BufferType)`（类名、方法名都没混淆）。
+- **怎么匹配**：只挂 `DmtTextView` 里签名是 `setText(CharSequence, BufferType)` 的那一个方法（类找不到走 `waitFail`，类在但没有这个方法走 `miss`，`MentionTextView` 类没找到也算类没找到）。回调里：先看开关（没开直接返回），再比较 `this` 的类是不是 `MentionTextView`（引用比较，不是子类），再从文字结尾往前找最靠后的 4 个连续空格，空格后第一个字符必须是数字、日期这一段的最后一个字符必须是「前」或「日」（认 `3天前`、`39分钟前`、`10月10日`、`2025年10月10日`），确认是日期之后才取字符串；地点可有可无。不认的写法（比如「昨天」）什么都不显示。
+- **显示**：和时长一样自己画一个 `TextView` 加到当前界面最上层（16sp，白字黑描边），默认在屏幕正中偏下 90px，位置存在 `pubX` / `pubY`；换了界面就拿掉重建。
+- **位置浮窗**：`TimePanel` 现在可以调两个文字（`TIME` / `PUB`），标题和滑动条对应各自的配置；设置页新增「发布日期和地点常显」卡片，有自己的「打开浮窗调整位置」和「归零」，推送的一次性请求是 `pubAdjust`。调发布信息位置时，时长文字不会因为浮窗开着而冒出来。
+- **什么时候撤掉**：`TimeHook` 已有的播放器监听里各加了一行：`onPlaying` 里调 `PubHook.onPlay(id)`（换了视频就撤掉旧的），`onStop` 里调 `PubHook.onStop(id)`（离开当前视频就撤掉）。不依赖「视频时长一直显示」有没有打开，但依赖那几个时长钩子（`time.playing` / `time.stop` / `time.release`）挂上了；没挂上时文字会一直留到下一次捕获或换了界面。
+- **没有定时器、没有轮询**，回调里除了确认是日期之后的一次字符串分配没有对象分配、反射和日志。
+- **局限**：①这条文案只在「展开」时设置（TextRec 里任务 4 共 13 次，划视频的任务 0 次），所以每个视频要先点一次「展开」才有得显示，不能做到不点就常显；②`DmtTextView#setText` 是通用文字控件的方法，所以每次调用都会进回调，开关关着或类不对时只多做几次布尔 / 引用判断；③`MentionTextView` 在别的地方（评论、简介）如果也有结尾恰好是「4 个空格 + 日期」的文字，会被误取；④没有在真机上验证过，解析函数只单独用样例字符串测过。
 
 ## 1.17.9：首页顶部标签勾选隐藏
 - 设置页新增"首页顶部标签"：推荐 / 关注 / 热点 / 同城 / 商城 / 经验 / 游戏 / 少儿 / 精选 / 团购 / 免费看剧 / 短剧 / 直播，勾选 = 隐藏。13 个标签来自 TextRec 追踪（40.7.0）里标签行每个 `HomeTopTabItemViewNew` 的 contentDescription；那台手机上当前显示的是推荐、关注、热点、同城、商城，其余 8 个在标签行里存在但抖音没有启用。
@@ -135,3 +147,4 @@
 - `CommentHook.DIGG_CLICK_METHOD`（`LJJJJJL`）：爱心按钮点击入口。
 - `BaseListFragmentPanel#LLLIILIL(MotionEvent)`：双击的统一入口（红心和点赞都在它下面）。
 - 评论按钮靠 contentDescription「评论N，按钮」查找。
+- `PubHook.DMT` / `PubHook.MENTION`：发布日期地点用到的文字控件类名（`DmtTextView#setText(CharSequence, BufferType)`、`MentionTextView`），以及文案结尾「4 个空格 + 日期 + 空格 + 地点」的格式。
