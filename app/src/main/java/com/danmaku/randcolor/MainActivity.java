@@ -434,6 +434,7 @@ public class MainActivity extends Activity {
             {"time.playing", "视频时长：开始播放"},
             {"tab.hide", "首页顶部标签隐藏"},
             {"pub.text", "发布日期地点：展开文案"},
+            {"pub.bind", "发布日期地点：视频数据"},
     };
 
     /** 用 root 读抖音数据目录里的 hooks.properties（抖音进程自己写的），列出每个钩子的状态。 */
