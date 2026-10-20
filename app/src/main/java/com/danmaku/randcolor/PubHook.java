@@ -43,8 +43,13 @@ import de.robv.android.xposed.XposedBridge;
  *    （7698182854795525988 / 7698386214974175347 / 7687788879000112430）bind 的 aid 和 onPlaying 的 id 逐个相同（#226/#244 等）。
  *  - bind 是翻页预加载触发的，邻近视频会提前 bind（36874ms bind 了 7696206519011937599，36892ms onPlaying 的还是 7687788879000112430，
  *    之后也没播过它），所以不能拿「最后一次 bind」当当前视频：bind 时按 aid 记下 createTime / ipAttribution，onPlaying(id) 来了再按 id 查出来显示。
- *  - Aweme 里的字段 createTime（秒级时间戳）和 ipAttribution（省名）取自 TextRec 的字段快照导出（这个仓库和 143514 那份里都没有，见 README 局限）。
- *    字段在安装阶段按名字找好并缓存（找不到就 miss，不猜）；回调里只做取值。
+ *  - 字段名的依据（TextRec 字段快照，textrec-tasks-20261020-150752 的 Aweme#toString 记录，this 就是 Aweme）：
+ *      this.aid = "7698029777320581952"（String）
+ *      this.createTime = 1792381800（数值，秒级，= 2026-10-19 11:50:00 +08:00）
+ *      this.ipAttribution = "广西"（String，省）
+ *      this.city = "450100"（String，6 位行政区划代码 = 南宁市；author.city 是空串）
+ *    字段在安装阶段按名字找好并缓存（找不到 aid / createTime 就 miss，不猜）；回调里只做取值。
+ *  - city 是代码不是名字，转城市名靠下面的 CITIES 表（只有 4 位地级代码；查不到就只显示省）。
  *
  * 没有定时器 / 轮询：文字只在上面的回调里更新或隐藏。
  */
@@ -54,13 +59,48 @@ final class PubHook {
     /** 版本相关（40.7.0）。 */
     private static final String DMT = "com.bytedance.ies.dmt.ui.widget.DmtTextView";
     private static final String MENTION = "com.ss.android.ugc.aweme.views.MentionTextView";
-    private static final String PLACEHOLDER = "2026-10-17 14:32:08 北京";
+    private static final String PLACEHOLDER = "2026-10-19 11:50:00 广西 南宁";
     /** 结尾「日期 地点」最多看多少个字符。 */
     private static final int MAX_TAIL = 40;
 
     // pub.bind：版本相关（40.7.0），类名没混淆（TextRec 的钩点签名里就是这两个名字）
     private static final String HOLDER = "com.ss.android.ugc.aweme.feed.adapter.VideoViewHolder";
     private static final String AWEME = "com.ss.android.ugc.aweme.feed.model.Aweme";
+    /**
+     * 地级行政区划代码（前 4 位）→ 城市简称。Aweme.city 是 6 位代码（450100 = 南宁），取前 4 位查。
+     * 只收大陆地级单位；表里没有的（省直辖县级、港澳台、新代码）查不到，就只显示省。格式 ";4 位代码名字" 一个接一个，末尾有分号。
+     */
+    private static final String CITIES = ";1101北京;1201天津"
+            + ";1301石家庄;1302唐山;1303秦皇岛;1304邯郸;1305邢台;1306保定;1307张家口;1308承德;1309沧州;1310廊坊;1311衡水"
+            + ";1401太原;1402大同;1403阳泉;1404长治;1405晋城;1406朔州;1407晋中;1408运城;1409忻州;1410临汾;1411吕梁"
+            + ";1501呼和浩特;1502包头;1503乌海;1504赤峰;1505通辽;1506鄂尔多斯;1507呼伦贝尔;1508巴彦淖尔;1509乌兰察布;1522兴安盟;1525锡林郭勒盟;1529阿拉善盟"
+            + ";2101沈阳;2102大连;2103鞍山;2104抚顺;2105本溪;2106丹东;2107锦州;2108营口;2109阜新;2110辽阳;2111盘锦;2112铁岭;2113朝阳;2114葫芦岛"
+            + ";2201长春;2202吉林;2203四平;2204辽源;2205通化;2206白山;2207松原;2208白城;2224延边"
+            + ";2301哈尔滨;2302齐齐哈尔;2303鸡西;2304鹤岗;2305双鸭山;2306大庆;2307伊春;2308佳木斯;2309七台河;2310牡丹江;2311黑河;2312绥化;2327大兴安岭"
+            + ";3101上海"
+            + ";3201南京;3202无锡;3203徐州;3204常州;3205苏州;3206南通;3207连云港;3208淮安;3209盐城;3210扬州;3211镇江;3212泰州;3213宿迁"
+            + ";3301杭州;3302宁波;3303温州;3304嘉兴;3305湖州;3306绍兴;3307金华;3308衢州;3309舟山;3310台州;3311丽水"
+            + ";3401合肥;3402芜湖;3403蚌埠;3404淮南;3405马鞍山;3406淮北;3407铜陵;3408安庆;3410黄山;3411滁州;3412阜阳;3413宿州;3415六安;3416亳州;3417池州;3418宣城"
+            + ";3501福州;3502厦门;3503莆田;3504三明;3505泉州;3506漳州;3507南平;3508龙岩;3509宁德"
+            + ";3601南昌;3602景德镇;3603萍乡;3604九江;3605新余;3606鹰潭;3607赣州;3608吉安;3609宜春;3610抚州;3611上饶"
+            + ";3701济南;3702青岛;3703淄博;3704枣庄;3705东营;3706烟台;3707潍坊;3708济宁;3709泰安;3710威海;3711日照;3713临沂;3714德州;3715聊城;3716滨州;3717菏泽"
+            + ";4101郑州;4102开封;4103洛阳;4104平顶山;4105安阳;4106鹤壁;4107新乡;4108焦作;4109濮阳;4110许昌;4111漯河;4112三门峡;4113南阳;4114商丘;4115信阳;4116周口;4117驻马店"
+            + ";4201武汉;4202黄石;4203十堰;4205宜昌;4206襄阳;4207鄂州;4208荆门;4209孝感;4210荆州;4211黄冈;4212咸宁;4213随州;4228恩施"
+            + ";4301长沙;4302株洲;4303湘潭;4304衡阳;4305邵阳;4306岳阳;4307常德;4308张家界;4309益阳;4310郴州;4311永州;4312怀化;4313娄底;4331湘西"
+            + ";4401广州;4402韶关;4403深圳;4404珠海;4405汕头;4406佛山;4407江门;4408湛江;4409茂名;4412肇庆;4413惠州;4414梅州;4415汕尾;4416河源;4417阳江;4418清远;4419东莞;4420中山;4451潮州;4452揭阳;4453云浮"
+            + ";4501南宁;4502柳州;4503桂林;4504梧州;4505北海;4506防城港;4507钦州;4508贵港;4509玉林;4510百色;4511贺州;4512河池;4513来宾;4514崇左"
+            + ";4601海口;4602三亚;4603三沙;4604儋州"
+            + ";5001重庆;5002重庆"
+            + ";5101成都;5103自贡;5104攀枝花;5105泸州;5106德阳;5107绵阳;5108广元;5109遂宁;5110内江;5111乐山;5113南充;5114眉山;5115宜宾;5116广安;5117达州;5118雅安;5119巴中;5120资阳;5132阿坝;5133甘孜;5134凉山"
+            + ";5201贵阳;5202六盘水;5203遵义;5204安顺;5205毕节;5206铜仁;5223黔西南;5226黔东南;5227黔南"
+            + ";5301昆明;5303曲靖;5304玉溪;5305保山;5306昭通;5307丽江;5308普洱;5309临沧;5323楚雄;5325红河;5326文山;5328西双版纳;5329大理;5331德宏;5333怒江;5334迪庆"
+            + ";5401拉萨;5402日喀则;5403昌都;5404林芝;5405山南;5406那曲;5425阿里"
+            + ";6101西安;6102铜川;6103宝鸡;6104咸阳;6105渭南;6106延安;6107汉中;6108榆林;6109安康;6110商洛"
+            + ";6201兰州;6202嘉峪关;6203金昌;6204白银;6205天水;6206武威;6207张掖;6208平凉;6209酒泉;6210庆阳;6211定西;6212陇南;6229临夏;6230甘南"
+            + ";6301西宁;6302海东;6322海北;6323黄南;6325海南;6326果洛;6327玉树;6328海西"
+            + ";6401银川;6402石嘴山;6403吴忠;6404固原;6405中卫"
+            + ";6501乌鲁木齐;6502克拉玛依;6504吐鲁番;6505哈密;6523昌吉;6527博尔塔拉;6528巴音郭楞;6529阿克苏;6530克孜勒苏;6531喀什;6532和田;6540伊犁;6542塔城;6543阿勒泰;";
+
     /** 最多记多少个视频（feed 无限滚动，只留最近的，当前视频和左右预加载的都在里面）。 */
     private static final int MAX_INFO = 48;
 
@@ -80,16 +120,17 @@ final class PubHook {
     private static final XC_MethodHook BIND_HOOK = new BindHook();
 
     /** 安装阶段找好的 Aweme 字段（回调里只取值）。ip 可以没有。 */
-    private static volatile Field fAid, fTime, fIp;
+    private static volatile Field fAid, fTime, fIp, fCity;
 
     /** 一个视频的发布时间和地点。 */
     private static final class Info {
         final long sec;
-        final String ip;
+        final String ip, city;
 
-        Info(long sec, String ip) {
+        Info(long sec, String ip, String city) {
             this.sec = sec;
             this.ip = ip;
+            this.city = city;
         }
     }
 
@@ -129,8 +170,8 @@ final class PubHook {
 
     /**
      * pub.bind：挂 VideoViewHolder 里第一个参数是 Aweme 的 bind（bind(Aweme) 和 bind(Aweme, int) 都挂，处理是幂等的）。
-     * Aweme 类按名字找，aid / createTime / ipAttribution 三个字段按名字找并缓存；aid（String）和 createTime（long / int）必须有，
-     * 缺了就 miss（字段被混淆了，需要重新用 TextRec 看 Aweme 的字段快照）；ipAttribution 没有或不是 String 就只显示日期。
+     * Aweme 类按名字找，aid / createTime / ipAttribution / city 四个字段按名字找并缓存；aid（String）和 createTime（long / int）必须有，
+     * 缺了就 miss（字段被混淆了，需要重新用 TextRec 看 Aweme 的字段快照）；ipAttribution、city 没有或不是 String 就少显示一段。
      */
     private static void tryBind(ClassLoader cl, ClassLoader ctx) {
         if (HookGuard.settled(HookGuard.PUB_BIND)) return;
@@ -159,11 +200,19 @@ final class PubHook {
         } catch (Throwable ignored) {
             ip = null;
         }
+        Field city = null;
+        try {
+            city = aw.getDeclaredField("city");
+            if (city.getType() != String.class) city = null;
+        } catch (Throwable ignored) {
+            city = null;
+        }
         int n = 0;
         try {
             a.setAccessible(true);
             t.setAccessible(true);
             if (ip != null) ip.setAccessible(true);
+            if (city != null) city.setAccessible(true);
             for (Method m : vh.getDeclaredMethods()) {
                 if (!m.getName().equals("bind")) continue;
                 Class<?>[] pt = m.getParameterTypes();
@@ -172,6 +221,7 @@ final class PubHook {
                     fAid = a;
                     fTime = t;
                     fIp = ip;
+                    fCity = city;
                 }
                 try {
                     XposedBridge.hookMethod(m, BIND_HOOK);
@@ -183,7 +233,7 @@ final class PubHook {
             HookGuard.waitFail(HookGuard.PUB_BIND);
             return;
         }
-        if (n > 0) HookGuard.ok(HookGuard.PUB_BIND, ip == null ? "没有地点字段，只显示日期" : "");
+        if (n > 0) HookGuard.ok(HookGuard.PUB_BIND, ip == null ? "没有地点字段，只显示日期" : (city == null ? "没有城市字段，只显示到省" : ""));
         else HookGuard.miss(HookGuard.PUB_BIND, "VideoViewHolder 里没有 bind(Aweme, …)（翻页绑定入口变了，需要重新追踪）");
     }
 
@@ -275,7 +325,9 @@ final class PubHook {
                     if (sec <= 0) return;
                     Field fi = fIp;
                     Object ip = fi == null ? null : fi.get(aw);
-                    known = new Info(sec, ip instanceof String ? (String) ip : null);
+                    Field fc = fCity;
+                    Object ct = fc == null ? null : fc.get(aw);
+                    known = new Info(sec, ip instanceof String ? (String) ip : null, ct instanceof String ? (String) ct : null);
                     synchronized (INFO) {
                         INFO.put(aid, known);
                     }
@@ -292,7 +344,7 @@ final class PubHook {
         show(CommentHook.top.get(), format(r));
     }
 
-    /** 发布时间 → 「2026-10-17 14:32:08」（createTime 是秒级时间戳，按手机时区），有地点就接在后面。 */
+    /** 发布时间 → 「2026-10-19 11:50:00 广西 南宁」（createTime 是秒级时间戳，按手机时区；后面是省和市，有才写）。 */
     private static String format(Info r) {
         Calendar c = Calendar.getInstance();
         c.setTimeInMillis(r.sec * 1000L);
@@ -307,8 +359,26 @@ final class PubHook {
         if (ip != null) {
             ip = ip.trim();
             if (!ip.isEmpty()) b.append(' ').append(ip);
+        } else {
+            ip = "";
         }
+        String city = cityName(r.city);
+        if (city != null && !ip.contains(city) && !city.contains(ip)) b.append(' ').append(city); // 北京 / 北京 这种重复只写一次
         return b.toString();
+    }
+
+    /** Aweme.city（6 位行政区划代码，如 "450100"）→ 城市简称；不是 6 位数字或表里没有就返回 null。 */
+    private static String cityName(String code) {
+        if (code == null || code.length() != 6) return null;
+        for (int i = 0; i < 6; i++) {
+            char ch = code.charAt(i);
+            if (ch < '0' || ch > '9') return null;
+        }
+        int i = CITIES.indexOf(";" + code.substring(0, 4));
+        if (i < 0) return null;
+        int s0 = i + 5;
+        int e = CITIES.indexOf(';', s0);
+        return e > s0 ? CITIES.substring(s0, e) : null;
     }
 
     private static StringBuilder two(StringBuilder b, int v) {
