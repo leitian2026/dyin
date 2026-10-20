@@ -84,9 +84,9 @@ final class TimeHook {
         return Looper.myLooper() == Looper.getMainLooper();
     }
 
-    /** 时长文字是否应该存在：设置里开了，或者位置浮窗正开着（调位置时即使没开也要看得到）。 */
+    /** 时长文字是否应该存在：设置里开了，或者位置浮窗正开着在调它（调位置时即使没开也要看得到）。 */
     private static boolean enabled() {
-        return DanmakuHook.cfg.timeAlways || TimePanel.isOpen();
+        return DanmakuHook.cfg.timeAlways || (TimePanel.isOpen() && TimePanel.target() == TimePanel.TIME);
     }
 
     // ------------------------------------------------------------ 钩子
@@ -158,6 +158,7 @@ final class TimeHook {
     // ------------------------------------------------------------ 状态事件
 
     private static void onStop(String id) {
+        PubHook.onStop(id); // 发布日期地点的文字也跟着撤掉（它自己比较视频 id）
         if (!id.equals(lastId)) return; // 别的视频的事件（比如旧视频迟到的）不动当前文字
         staleId = id;
         staleUntil = SystemClock.uptimeMillis() + STALE_MS; // 它迟到的进度回调不再把文字画回来
@@ -165,6 +166,7 @@ final class TimeHook {
     }
 
     private static void onPlaying(String id, Object ev) {
+        PubHook.onPlay(id); // 换了视频就撤掉上一个视频的发布日期地点；不依赖时长有没有开
         if (!enabled()) return;
         if (id.equals(staleId)) staleId = null; // 这个视频又开始播了（比如划回去）
         boolean changed = switchTo(id);
@@ -339,7 +341,7 @@ final class TimeHook {
             if (c.timeAdjust && isHostActivity(a)) {
                 c.timeAdjust = false; // 一次性请求：先清掉并写回，免得下次回到前台又弹
                 DanmakuHook.saveCfg();
-                TimePanel.open(a);
+                TimePanel.open(a, TimePanel.TIME);
             } else if (TimePanel.isOpen()) {
                 TimePanel.open(a); // 换了界面：浮窗跟过去
             }
