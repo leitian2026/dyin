@@ -169,10 +169,10 @@ public class MainActivity extends Activity {
         root.addView(section("发布日期和地点常显"));
         LinearLayout pb = card();
         swPub = new Switch(this);
-        pb.addView(switchRow("发布日期和地点一直显示", "作为视频文案的最后一行显示「2026-10-19 11:50:00 广西 南宁」，跟文案连在一起；取自视频本身的发布时间（精确到秒）和 IP 属地（省，有城市就加市），不用点「展开」；没有地点的视频只显示时间", swPub));
+        pb.addView(switchRow("发布日期和地点一直显示", "在作者声明上方单独显示一行「2026-10-19 11:50:00 广西 南宁」；没有作者声明的视频，就显示在声明本来的位置；取自视频本身的发布时间（精确到秒）和 IP 属地（省，有城市就加市），不用点「展开」；没有地点的视频只显示时间", swPub));
         pb.addView(divider());
         pb.addView(tv("字号", 17, cText, true));
-        TextView pdsc = tv("这一行并进了视频文案，位置跟着文案走，不用调；只能调字号（8～40 sp，默认 16）。点「保存并应用」后，抖音回到前台、划到下一个视频时生效。", 13, cSub, false);
+        TextView pdsc = tv("这一行的位置由抖音的布局决定（文案下面、作者声明上面），不用调；只能调字号（8～40 sp，默认 16）。点「保存并应用」后，抖音回到前台、划到下一个视频时生效。", 13, cSub, false);
         pdsc.setPadding(0, dp(2), 0, dp(12));
         pb.addView(pdsc);
         LinearLayout sz = new LinearLayout(this);
@@ -469,9 +469,10 @@ public class MainActivity extends Activity {
             {"time.release", "视频时长：释放"},
             {"time.playing", "视频时长：开始播放"},
             {"tab.hide", "首页顶部标签隐藏"},
-            {"pub.text", "发布日期地点：并进文案"},
+            {"pub.text", "发布日期地点：认文案"},
             {"pub.bind", "发布日期地点：视频数据"},
             {"pub.anchor", "视频文案：描边 / 改色"},
+            {"pub.row", "发布日期地点：声明行位置"},
             {"cap.draw", "视频文案：绘制时改色"},
     };
 
