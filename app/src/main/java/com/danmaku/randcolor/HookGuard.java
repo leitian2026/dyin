@@ -30,8 +30,8 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 final class HookGuard {
     private HookGuard() {}
 
-    static final int PAINT = 0, TIME_PROGRESS = 1, TIME_STOP = 2, TIME_RELEASE = 3, TIME_PLAYING = 4, DTAP = 5, DIGG = 6, TAB = 7, PUB = 8, PUB_BIND = 9, PUB_ANCHOR = 10, DTAP_SEEN = 11, DTAP_CUT = 12, CAP_DRAW = 13, DTAP_CLICK = 14;
-    static final String[] IDS = {"paint", "time.progress", "time.stop", "time.release", "time.playing", "comment.dtap", "comment.digg", "tab.hide", "pub.text", "pub.bind", "pub.anchor", "dtap.seen", "dtap.cut", "cap.draw", "dtap.click"};
+    static final int PAINT = 0, TIME_PROGRESS = 1, TIME_STOP = 2, TIME_RELEASE = 3, TIME_PLAYING = 4, DTAP = 5, DIGG = 6, TAB = 7, PUB = 8, PUB_BIND = 9, PUB_ANCHOR = 10, DTAP_SEEN = 11, DTAP_CUT = 12, CAP_DRAW = 13, DTAP_CLICK = 14, PUB_ROW = 15;
+    static final String[] IDS = {"paint", "time.progress", "time.stop", "time.release", "time.playing", "comment.dtap", "comment.digg", "tab.hide", "pub.text", "pub.bind", "pub.anchor", "dtap.seen", "dtap.cut", "cap.draw", "dtap.click", "pub.row"};
 
     /** 匹配规则改了就加一：已经放弃的钩子会重新试一次。 */
     private static final int RULES_REV = 1;
