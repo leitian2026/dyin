@@ -22,6 +22,14 @@
 1. LSPosed 启用模块，作用域勾选抖音，强杀抖音重开。
 2. 打开模块设置，点「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
+## 1.20.4：发布日期地点并进文案，在文案正下方
+- **问题**（用户截图）：发布日期地点那一行的位置一直变：有的视频压在视频人脸中间（文案控件没认出，退到屏幕正中），有的视频压在文案第二行上（位置是在文案外面按窗口坐标算的，文案高度或祖先位置变了没跟上）。
+- **做法**：不再算坐标。文案控件（`MentionTextView` / `ScrollMentionTextView`）每次 `setText`，在已有的 `pub.text` 钩子（`DmtTextView#setText`）的 `before` 回调里，把参数换成「原文案 + 换行 + 日期地点」，信息就是文案自己的最后一行，在文案正下方；位置、展开 / 收起、跟着页面滑动都由抖音的布局负责。没有新钩子，匹配规则不变，`RULES_REV` 不变。
+- **认视频**：设置栈（TextRec，`textrec-tasks-20261021-103536` 的 #1）是 `DmtTextView.setText ← ScrollMentionTextView.setText ← TextView.setText ← lambda ← Handler`，是异步投递的，不在 bind 里同步调用，所以按文案文字认：开头和某个视频的 `Aweme.desc` 相同。比较忽略空白和竖线、只比前 12 个有效字符（截图 1 的「第42集 | 敦亲王…」带空格和竖线，原来只比前 16 个字符会对不上）。预加载的邻近视频的文案也同样带上这一行。
+- **不重复**：抖音点「展开」时自己会在文案末尾加「日期 地点」（`tail()` 认得出），这时不再追加。
+- **取代**：原来 decor 里单独画的浮层只在「打开浮窗调整位置」时画一个示例；位置微调和字号滑动条对这一行不再起作用，这一行用 `RelativeSizeSpan(0.9)` 跟着文案字号。`onPlay` 里不再 `showInfo`，只刷新文案样式。
+- **局限**：①没有编译、没有上机；②文案控件如果有 `maxLines` 限制，收起状态下多出来的这一行可能被截掉（没有证据说明有没有）；③「抖音精选内容」那种视频的文案是不是同样的两个类没有证据，不是的话不会带这一行（以前会画在屏幕正中，现在不显示）；④冷启动后第一个视频如果文案在 `pub.bind` 挂上之前就设好了，要等下一次 `setText`（划走再划回、展开 / 收起）才会带上；⑤回调里要新建一个带这一行的文字（只在文案 `setText` 时，不在绘制里），和「回调里不分配对象」的规矩有一点出入。
+
 ## 1.20.3：双击打开评论后视频不再被暂停（dtap.click）
 - **问题**：双击打开评论后，视频停在暂停状态。
 - **依据**（TextRec，40.7.0，`textrec-tasks-20261021-105717`，开着双击改评论）：①单击是延迟处理的：单击暂停（touch 18413）→ `onPlayPause` 18674，隔 261ms；单击继续（touch 32279）→ 继续播放 32467，隔 188ms。继续播放那次的栈：`WeakHandler.handleMessage ← BaseListFragmentPanel.handleMsg ← X.06vk.run ← FeedComponentsRoot.handleSingleClick ← handleSingleClickInner ← handleVideoPauseAndPlay(Aweme)`，暂停 / 继续是同一个切换，`FeedComponentsRoot` 这几个方法 TextRec 都标 [稳定]。②双击（任务 4）：第一下 touch 46492，评论页 46671 打开，第二下 touch 46763，`onPlayPause` 46844，比第二下还晚，调用栈和单击暂停完全相同。
