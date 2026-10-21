@@ -22,6 +22,14 @@
 1. LSPosed 启用模块，作用域勾选抖音，强杀抖音重开。
 2. 打开模块设置，点「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
+## 1.20.2：视频文案改色多一条「绘制时改色」的路径（cap.draw）
+- **新增钩子**：`cap.draw`（`HookGuard` 编号 13，设置页「视频文案：绘制时改色」，挂在 `PubHook.tryHook` → `tryDraw` 里，它本来就在 `DanmakuHook.init` 和 `hookResume` 两处调用）：`com.ss.android.ugc.aweme.views.MentionTextView#onDraw(Canvas)`（类名、方法名都没混淆）。
+- **依据**（TextRec，40.7.0，`textrec-tasks-20261021-103536` 的 #1）：文案控件是 `ScrollMentionTextView`（id=`desc`）；绘制栈是 `DmtTextView.onDraw`（栈第 1 层）← `MentionTextView.onDraw`（栈第 2 层，TextRec 标 [稳定]）。`MentionTextView` 里声明了 `onDraw`，`ScrollMentionTextView` 和 `MentionTextView` 的实例都经过它。画笔颜色 `0xE6FFFFFF`，同一条记录里「文字颜色(最近一次被设置)」也是 `0xE6FFFFFF`。
+- **做法**：`TextView.onDraw` 每次开头都用 `mCurTextColor` 给画笔上色，只改画笔会被覆盖。所以在 `onDraw` 前把 `mCurTextColor` 临时换成 `capColor`，`onDraw` 后换回去；不调 `setTextColor`（它会 invalidate，在 `onDraw` 里调会逼着每帧重画），文案内容不动。只改 `styleCaption` 认出并打过 tag 的文案控件，评论等其他 `MentionTextView` 不动。`mCurTextColor` 在安装阶段按名字找好并缓存；回调里只有 `Field.getInt / setInt`，没有查找、没有分配、没有日志，整体 `try/catch Throwable`。
+- **和 `setText` 那条路的关系**：没动已有钩子（`pub.text` / `pub.anchor` / `pub.bind` 的匹配规则不变，`RULES_REV` 不变）。`setText` 那条路仍负责认出文案控件、打 tag、设黑边；`cap.draw` 负责「画的时候」用 `capColor`，抖音之后怎么重设字色都不影响。
+- **降级**：读不到 `mCurTextColor` 或类里没有 `onDraw(Canvas)` 就 `miss`，功能安静失效，文案改色退回 1.19.x 的 `setText` 路径，抖音原有行为不变。
+- **局限**：①没有编译（没有 Android SDK）、没有上机；②话题、@ 这类带 span 的文字自己带颜色，仍是抖音原来的颜色；③`capColor` 是不透明色，抖音原来的字色带 90% 透明度（`0xE6`），改后文案会比原来更实；④`mCurTextColor` 是系统的隐藏字段，LSPosed 下一般能读，读不到时设置页「钩子状态」会显示 `cap.draw` 未适配；⑤`MentionTextView` 子类如果重写 `onDraw` 又不调 `super.onDraw`，这个钩子不会走到。
+
 ## 1.20.1：修构建错误（PubHook 缺 tryText）
 - **问题**：构建报 `PubHook.java:208: cannot find symbol: method tryText(ClassLoader,ClassLoader)`。`PubHook.tryHook` 里调用了 `tryText`，但 `PubHook.java` 里没有它的定义（上传的 1.19.1 压缩包里就已经是这样，不是 1.20.0 的改动引起的）。
 - **做法**：补上 `tryText`：先找 `MentionTextView`（找不到走 `waitFail`），记下 `mentionCls`，再用 `HookGuard.hook` 挂 `DmtTextView` 里 `setText(CharSequence, TextView$BufferType)`（没匹配走 `miss`）。写法照 1.18.0 的说明（见下面 1.18.0 一节）。
