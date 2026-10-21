@@ -22,11 +22,9 @@ public final class DanmakuConfig {
     public boolean timeAlways = false;
     /** 时长文字相对屏幕正中的偏移，单位 px。右、下为正。（1.16 起由 dp 改为 px，键名也换了，旧值不再使用） */
     public int timeX = 0, timeY = 0;
-    /** 发布日期和地点一直显示（自己画一行「3天前 北京」）。 */
+    /** 发布日期和地点一直显示（并进视频文案的最后一行）。 */
     public boolean pubAlways = false;
-    /** 发布信息文字相对屏幕正中的偏移，单位 px。右、下为正。默认在时长文字下面一点。 */
-    public int pubX = 0, pubY = 0;
-    /** 时长文字 / 发布信息文字的字号，单位 sp（位置浮窗里的 − / + 每点一下增减 1）。默认 = 以前写死的 20 / 16。 */
+    /** 时长文字 / 发布信息那一行的字号，单位 sp（时长在位置浮窗里调，发布信息在设置页调）。默认 = 以前写死的 20 / 16。 */
     public int timeSize = 20, pubSize = 16;
     /** 视频文案加黑色描边（用阴影层画一圈黑边）。关掉后要重启抖音才恢复。 */
     public boolean capOutline = false;
@@ -39,8 +37,6 @@ public final class DanmakuConfig {
     public int idleExitMin = 0;
     /** 一次性请求：抖音回到前台时弹出「位置浮窗」，弹出后立即被抖音清掉。 */
     public boolean timeAdjust = false;
-    /** 一次性请求：抖音回到前台时弹出「发布信息位置浮窗」，弹出后立即被抖音清掉。 */
-    public boolean pubAdjust = false;
 
     public String toText() {
         try {
@@ -54,9 +50,6 @@ public final class DanmakuConfig {
             p.setProperty("timeY", String.valueOf(timeY));
             p.setProperty("timeAdjust", String.valueOf(timeAdjust));
             p.setProperty("pubAlways", String.valueOf(pubAlways));
-            p.setProperty("pubX", String.valueOf(pubX));
-            p.setProperty("pubY", String.valueOf(pubY));
-            p.setProperty("pubAdjust", String.valueOf(pubAdjust));
             p.setProperty("timeSize", String.valueOf(timeSize));
             p.setProperty("pubSize", String.valueOf(pubSize));
             p.setProperty("capOutline", String.valueOf(capOutline));
@@ -105,9 +98,6 @@ public final class DanmakuConfig {
         c.timeY = parseOffset(p.getProperty("timeY", "0"));
         c.timeAdjust = Boolean.parseBoolean(p.getProperty("timeAdjust", "false").trim());
         c.pubAlways = Boolean.parseBoolean(p.getProperty("pubAlways", "false").trim());
-        c.pubX = parseOffset(p.getProperty("pubX", "0"));
-        c.pubY = parseOffset(p.getProperty("pubY", "0"));
-        c.pubAdjust = Boolean.parseBoolean(p.getProperty("pubAdjust", "false").trim());
         c.timeSize = parseSize(p.getProperty("timeSize", "20"), 20);
         c.pubSize = parseSize(p.getProperty("pubSize", "16"), 16);
         c.capOutline = Boolean.parseBoolean(p.getProperty("capOutline", "false").trim());
