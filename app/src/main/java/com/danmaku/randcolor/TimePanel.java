@@ -17,22 +17,21 @@ import android.widget.TextView;
 import java.lang.ref.WeakReference;
 
 /**
- * 位置浮窗：画在抖音当前界面的最上层，用来调时长文字（或发布日期地点文字）的位置和字号，改动实时可见。同一个浮窗，
- * 调哪一个由 target 决定（TIME / PUB）。
- *  - 三条滑动条（水平 / 垂直 / 字号），左端是减、右端是加。位置：范围是半个屏幕，0 在正中（发布信息有文案锚点时 0 = 文案左下角）；
+ * 位置浮窗：画在抖音当前界面的最上层，用来调时长文字的位置和字号，改动实时可见。
+ *  - 三条滑动条（水平 / 垂直 / 字号），左端是减、右端是加。位置：范围是半个屏幕，0 在正中；
  *    字号：8～40 sp。
  *  - 两端的 − / + 每点一下：位置移动 2 像素，字号增减 1 号（1 sp）。「归零」只归位置，不动字号。
  *  - 标题栏可以拖动，浮窗挡住文字时把它拖开。
  *  - 松手（滑动条 / 按钮）时写回配置文件；点「完成」写回并关闭。
- * 由模块设置页的「打开浮窗调整位置」触发（推送 timeAdjust=true / pubAdjust=true 后启动抖音）。
+ * 由模块设置页的「打开浮窗调整位置」触发（推送 timeAdjust=true 后启动抖音）。
  */
 final class TimePanel {
     private TimePanel() {}
 
     private static final int STEP_PX = 2;
 
-    /** 浮窗在调哪一个文字。 */
-    static final int TIME = 0, PUB = 1;
+    /** 浮窗在调哪一个文字（现在只有时长；发布信息并进了文案，没有浮层可调，只在设置页调字号）。 */
+    static final int TIME = 0;
     private static int target = TIME;
 
     private static WeakReference<View> panelRef = new WeakReference<>(null);
@@ -65,8 +64,7 @@ final class TimePanel {
         ViewGroup decor = (ViewGroup) a.getWindow().getDecorView();
         View old = panelRef.get();
         open = true;
-        if (target == PUB) PubHook.showSample(a); // 先放文字，再放浮窗，浮窗才在文字上面
-        else TimeHook.showSample(a);
+        TimeHook.showSample(a); // 先放文字，再放浮窗，浮窗才在文字上面
         if (old != null && old.getParent() == decor) {
             old.bringToFront();
             return;
@@ -90,8 +88,7 @@ final class TimePanel {
         if (p != null && p.getParent() instanceof ViewGroup) ((ViewGroup) p.getParent()).removeView(p);
         panelRef = new WeakReference<>(null);
         axX = axY = axS = null;
-        if (target == PUB) PubHook.onPanelClosed();
-        else TimeHook.onPanelClosed();
+        TimeHook.onPanelClosed();
     }
 
     // ------------------------------------------------------------ 界面
@@ -108,7 +105,7 @@ final class TimePanel {
         LinearLayout head = new LinearLayout(a);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = txt(a, target == PUB ? "⠿ 发布信息位置（拖这里移动浮窗）" : "⠿ 时长位置（拖这里移动浮窗）", 13, 0xCCFFFFFF, false);
+        TextView title = txt(a, "⠿ 时长位置（拖这里移动浮窗）", 13, 0xCCFFFFFF, false);
         title.setPadding(0, dp(a, 10), 0, dp(a, 10));
         final float[] st = new float[4];
         title.setOnTouchListener((v, e) -> {
@@ -269,8 +266,7 @@ final class TimePanel {
 
         int get() {
             DanmakuConfig c = DanmakuHook.cfg;
-            if (size) return target == PUB ? c.pubSize : c.timeSize;
-            if (target == PUB) return horiz ? c.pubX : c.pubY;
+            if (size) return c.timeSize;
             return horiz ? c.timeX : c.timeY;
         }
 
@@ -278,25 +274,15 @@ final class TimePanel {
             v = Math.max(lo(), Math.min(hi(), v));
             DanmakuConfig c = DanmakuHook.cfg;
             if (size) {
-                if (target == PUB) c.pubSize = v;
-                else c.timeSize = v;
-            } else if (target == PUB) {
-                if (horiz) c.pubX = v;
-                else c.pubY = v;
+                c.timeSize = v;
             } else {
                 if (horiz) c.timeX = v;
                 else c.timeY = v;
             }
             if (!fromSlider && sb != null) sb.setProgress(v - lo()); // fromUser=false，不会回调到 set
             refresh();
-            if (size) {
-                if (target == PUB) PubHook.applySizeNow();
-                else TimeHook.applySizeNow();
-            } else if (target == PUB) {
-                PubHook.applyOffsetNow();
-            } else {
-                TimeHook.applyOffsetNow();
-            }
+            if (size) TimeHook.applySizeNow();
+            else TimeHook.applyOffsetNow();
         }
 
         void refresh() {
