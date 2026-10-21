@@ -42,14 +42,14 @@ public class MainActivity extends Activity {
     private final CheckBox[] cbTabs = new CheckBox[TAB_LABELS.length];
     private Switch swEnabled, swLikeBtn, swDtap, swTime, swPub;
     private LinearLayout segMode, statusCard;
-    private TextView tvOffset, tvPubOffset;
-    private int tX, tY, pX, pY;
+    private TextView tvOffset, tvPubSize;
+    private int tX, tY;
     /** 时长 / 发布信息文字的字号（sp），和视频文案的颜色（0 = 不改）；字号在抖音的位置浮窗里调，回到本页同步。 */
     private int tSize = 20, pSize = 16, capColor;
     private Switch swCapOutline;
     private View capSwatch;
     private TextView tvCapColor;
-    private TextView tvStatus, btnPush, btnAdjust, btnAdjustPub, btnHooks;
+    private TextView tvStatus, btnPush, btnAdjust, btnHooks;
     private ScrollView scroll;
 
     @Override
@@ -149,7 +149,7 @@ public class MainActivity extends Activity {
         btns.setOrientation(LinearLayout.HORIZONTAL);
         btnAdjust = pillButton("打开浮窗调整位置", true);
         btnAdjust.setTextSize(16);
-        btnAdjust.setOnClickListener(v -> openAdjust(false));
+        btnAdjust.setOnClickListener(v -> openAdjust());
         btns.addView(btnAdjust, new LinearLayout.LayoutParams(0, dp(48), 1f));
         TextView reset = pillButton("归零", false);
         reset.setTextSize(16);
@@ -169,34 +169,33 @@ public class MainActivity extends Activity {
         root.addView(section("发布日期和地点常显"));
         LinearLayout pb = card();
         swPub = new Switch(this);
-        pb.addView(switchRow("发布日期和地点一直显示", "作为视频文案的最后一行显示「2026-10-19 11:50:00 广西 南宁」，跟文案连在一起、在文案正下方；取自视频本身的发布时间（精确到秒）和 IP 属地（省，有城市就加市），不用点「展开」；没有地点的视频只显示时间", swPub));
+        pb.addView(switchRow("发布日期和地点一直显示", "作为视频文案的最后一行显示「2026-10-19 11:50:00 广西 南宁」，跟文案连在一起；取自视频本身的发布时间（精确到秒）和 IP 属地（省，有城市就加市），不用点「展开」；没有地点的视频只显示时间", swPub));
         pb.addView(divider());
-        pb.addView(tv("位置微调", 17, cText, true));
-        TextView pdsc = tv("1.20.4 起这一行直接并进文案文字里，位置和字号跟着文案走，下面的位置微调对它不再起作用（浮窗里只剩一个示例）。", 13, cSub, false);
+        pb.addView(tv("字号", 17, cText, true));
+        TextView pdsc = tv("这一行并进了视频文案，位置跟着文案走，不用调；只能调字号（8～40 sp，默认 16）。点「保存并应用」后，抖音回到前台、划到下一个视频时生效。", 13, cSub, false);
         pdsc.setPadding(0, dp(2), 0, dp(12));
         pb.addView(pdsc);
-        tvPubOffset = tv("", 14, cSub, false);
-        tvPubOffset.setTypeface(Typeface.MONOSPACE);
-        tvPubOffset.setPadding(0, 0, 0, dp(12));
-        pb.addView(tvPubOffset);
-        LinearLayout pbtns = new LinearLayout(this);
-        pbtns.setOrientation(LinearLayout.HORIZONTAL);
-        btnAdjustPub = pillButton("打开浮窗调整位置", true);
-        btnAdjustPub.setTextSize(16);
-        btnAdjustPub.setOnClickListener(v -> openAdjust(true));
-        pbtns.addView(btnAdjustPub, new LinearLayout.LayoutParams(0, dp(48), 1f));
-        TextView preset = pillButton("归零", false);
-        preset.setTextSize(16);
-        preset.setOnClickListener(v -> {
-            pX = 0;
-            pY = 0;
-            showPubOffset();
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("adjusting", false).apply();
+        LinearLayout sz = new LinearLayout(this);
+        sz.setOrientation(LinearLayout.HORIZONTAL);
+        sz.setGravity(Gravity.CENTER_VERTICAL);
+        TextView minus = pillButton("−", false);
+        minus.setTextSize(20);
+        minus.setOnClickListener(v -> {
+            pSize = Math.max(DanmakuConfig.SIZE_MIN, pSize - 1);
+            showPubSize();
         });
-        LinearLayout.LayoutParams prl = new LinearLayout.LayoutParams(dp(88), dp(48));
-        prl.leftMargin = dp(10);
-        pbtns.addView(preset, prl);
-        pb.addView(pbtns);
+        sz.addView(minus, new LinearLayout.LayoutParams(dp(56), dp(48)));
+        tvPubSize = tv("", 16, cText, true);
+        tvPubSize.setGravity(Gravity.CENTER);
+        sz.addView(tvPubSize, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView plus = pillButton("+", false);
+        plus.setTextSize(20);
+        plus.setOnClickListener(v -> {
+            pSize = Math.min(DanmakuConfig.SIZE_MAX, pSize + 1);
+            showPubSize();
+        });
+        sz.addView(plus, new LinearLayout.LayoutParams(dp(56), dp(48)));
+        pb.addView(sz);
         root.addView(pb, cardLp());
 
         // ---- 视频文案样式
@@ -309,12 +308,10 @@ public class MainActivity extends Activity {
         tY = c.timeY;
         showOffset();
         swPub.setChecked(c.pubAlways);
-        pX = c.pubX;
-        pY = c.pubY;
         tSize = c.timeSize;
         pSize = c.pubSize;
         showOffset();
-        showPubOffset();
+        showPubSize();
         swCapOutline.setChecked(c.capOutline);
         capColor = c.capColor;
         showCapColor();
@@ -331,8 +328,6 @@ public class MainActivity extends Activity {
         c.timeX = tX;
         c.timeY = tY;
         c.pubAlways = swPub.isChecked();
-        c.pubX = pX;
-        c.pubY = pY;
         c.timeSize = tSize;
         c.pubSize = pSize;
         c.capOutline = swCapOutline.isChecked();
@@ -383,10 +378,9 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------ 位置浮窗
 
     /** 把「弹出位置浮窗」的请求（timeAdjust=true）连同当前全部设置推给抖音，然后打开抖音。 */
-    private void openAdjust(final boolean pub) {
-        final TextView btn = pub ? btnAdjustPub : btnAdjust;
-        if (pub) swPub.setChecked(true);
-        else swTime.setChecked(true);
+    private void openAdjust() {
+        final TextView btn = btnAdjust;
+        swTime.setChecked(true);
         DanmakuConfig c = read();
         final String pkgs = etPkg.getText().toString().trim();
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("cfg", c.toText()).putString("pkg", pkgs).apply();
@@ -395,8 +389,7 @@ public class MainActivity extends Activity {
             showStatus("请先填目标包名", 2);
             return;
         }
-        if (pub) c.pubAdjust = true;
-        else c.timeAdjust = true;
+        c.timeAdjust = true;
         final String pushText = c.toText();
         setBusy(btn, true, "正在打开…");
         showStatus("正在推送…（首次会弹出 root 授权，请允许）", 0);
@@ -454,12 +447,8 @@ public class MainActivity extends Activity {
                 tX = c.timeX;
                 tY = c.timeY;
                 showOffset();
-                pX = c.pubX;
-                pY = c.pubY;
                 tSize = c.timeSize;
-                pSize = c.pubSize;
                 showOffset();
-                showPubOffset();
                 SharedPreferences sp2 = getSharedPreferences(PREFS, MODE_PRIVATE);
                 sp2.edit().putString("cfg", read().toText()).putBoolean("adjusting", false).apply();
             });
@@ -480,9 +469,9 @@ public class MainActivity extends Activity {
             {"time.release", "视频时长：释放"},
             {"time.playing", "视频时长：开始播放"},
             {"tab.hide", "首页顶部标签隐藏"},
-            {"pub.text", "发布日期地点：展开文案"},
+            {"pub.text", "发布日期地点：并进文案"},
             {"pub.bind", "发布日期地点：视频数据"},
-            {"pub.anchor", "视频文案：位置 / 描边 / 改色"},
+            {"pub.anchor", "视频文案：描边 / 改色"},
             {"cap.draw", "视频文案：绘制时改色"},
     };
 
@@ -634,8 +623,8 @@ public class MainActivity extends Activity {
         if (tvOffset != null) tvOffset.setText("当前位置  水平 " + signed(tX) + " px　垂直 " + signed(tY) + " px　字号 " + tSize + " sp");
     }
 
-    private void showPubOffset() {
-        if (tvPubOffset != null) tvPubOffset.setText("当前位置  水平 " + signed(pX) + " px　垂直 " + signed(pY) + " px　字号 " + pSize + " sp");
+    private void showPubSize() {
+        if (tvPubSize != null) tvPubSize.setText("字号 " + pSize + " sp");
     }
 
     private static String signed(int v) {
