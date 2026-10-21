@@ -47,7 +47,8 @@ public class MainActivity extends Activity {
     /** 时长 / 发布信息的字号（sp）、三处颜色（0 = 默认 / 不改）、发布信息模板和它的预览。 */
     private SizeField timeSizeF, pubSizeF;
     private ColorField timeColorF, pubColorF, capColorF;
-    private EditText etPubFmt;
+    private final java.util.ArrayList<Block> blocks = new java.util.ArrayList<>();
+    private LinearLayout blockList;
     private TextView tvPubPreview;
     private Switch swCapOutline;
     private TextView tvStatus, btnPush, btnHooks;
@@ -160,46 +161,37 @@ public class MainActivity extends Activity {
         pb.addView(switchRow("发布日期和地点一直显示", "在视频文案下面单独显示一行（有作者声明时在声明上方）；取自视频本身的发布时间（精确到秒）和 IP 属地（省，有城市就加市），不用点「展开」", swPub));
         pb.addView(divider());
         pb.addView(tv("显示内容和顺序", 17, cText, true));
-        TextView pfd = tv("想怎么排就怎么排，想加什么字就加什么字：下面的按钮会在光标处插入 {日期} {时间} {地点} {省} {市}，也可以自己打字，比如「发布时间：{日期} {时间}」，或者把地点放前面。写 \\n 表示换行。不限长度，太长会自动换行，不会被截断。", 13, cSub, false);
+        TextView pfd = tv("下面每一项按从上到下的顺序显示在同一行，数据项之间自动空一格：点 ↑ ↓ 调顺序，✕ 删除；「+ 文字」加你自己的字，比如「发布时间：」「发布地：」，文字里的空格会原样保留；「+ 换行」另起一行。不限长度，太长会自动换行，不会被截断。", 13, cSub, false);
         pfd.setPadding(0, dp(2), 0, dp(10));
         pb.addView(pfd);
-        etPubFmt = field();
-        etPubFmt.setHint(PubFormat.DEFAULT);
-        etPubFmt.addTextChangedListener(new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int st, int c, int a) {
-            }
-
-            @Override
-            public void onTextChanged(CharSequence s, int st, int b, int c) {
-            }
-
-            @Override
-            public void afterTextChanged(Editable e) {
-                updatePubPreview();
-            }
-        });
-        pb.addView(etPubFmt);
-        LinearLayout chips = new LinearLayout(this);
-        chips.setOrientation(LinearLayout.HORIZONTAL);
-        chips.setPadding(0, dp(10), 0, 0);
+        blockList = new LinearLayout(this);
+        blockList.setOrientation(LinearLayout.VERTICAL);
+        pb.addView(blockList);
+        LinearLayout add1 = new LinearLayout(this);
+        add1.setOrientation(LinearLayout.HORIZONTAL);
         String[] toks = {"日期", "时间", "地点", "省", "市"};
         for (int i = 0; i < toks.length; i++) {
-            final String tok = "{" + toks[i] + "}";
-            TextView chip = pillButton(toks[i], false);
-            chip.setTextSize(15);
-            chip.setOnClickListener(v -> insertToken(tok));
+            final String tok = toks[i];
             LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(0, dp(44), 1f);
             if (i > 0) cl.leftMargin = dp(6);
-            chips.addView(chip, cl);
+            add1.addView(addButton("+ " + tok, () -> blocks.add(new Block(tok, null))), cl);
         }
-        pb.addView(chips);
-        TextView resetFmt = pillButton("恢复默认顺序", false);
-        resetFmt.setTextSize(15);
-        resetFmt.setOnClickListener(v -> etPubFmt.setText(PubFormat.DEFAULT));
-        LinearLayout.LayoutParams rfl = new LinearLayout.LayoutParams(-1, dp(44));
-        rfl.topMargin = dp(8);
-        pb.addView(resetFmt, rfl);
+        LinearLayout.LayoutParams a1l = new LinearLayout.LayoutParams(-1, -2);
+        a1l.topMargin = dp(4);
+        pb.addView(add1, a1l);
+        LinearLayout add2 = new LinearLayout(this);
+        add2.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams c1 = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        add2.addView(addButton("+ 文字", () -> blocks.add(new Block(null, ""))), c1);
+        LinearLayout.LayoutParams c2 = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        c2.leftMargin = dp(6);
+        add2.addView(addButton("+ 换行", () -> blocks.add(new Block("换行", null))), c2);
+        LinearLayout.LayoutParams c3 = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        c3.leftMargin = dp(6);
+        add2.addView(addButton("恢复默认", () -> parseTemplate(PubFormat.DEFAULT)), c3);
+        LinearLayout.LayoutParams a2l = new LinearLayout.LayoutParams(-1, -2);
+        a2l.topMargin = dp(8);
+        pb.addView(add2, a2l);
         tvPubPreview = tv("", 14, cText, false);
         tvPubPreview.setPadding(dp(4), dp(12), 0, 0);
         pb.addView(tvPubPreview);
@@ -317,7 +309,8 @@ public class MainActivity extends Activity {
         swPub.setChecked(c.pubAlways);
         timeSizeF.set(c.timeSize);
         pubSizeF.set(c.pubSize);
-        etPubFmt.setText(c.pubFormat);
+        parseTemplate(c.pubFormat);
+        renderBlocks();
         timeColorF.set(c.timeColor);
         pubColorF.set(c.pubColor);
         swCapOutline.setChecked(c.capOutline);
@@ -335,8 +328,7 @@ public class MainActivity extends Activity {
         c.pubAlways = swPub.isChecked();
         c.timeSize = timeSizeF.v;
         c.pubSize = pubSizeF.v;
-        String fmt = etPubFmt.getText().toString();
-        c.pubFormat = fmt.trim().isEmpty() ? PubFormat.DEFAULT : fmt;
+        c.pubFormat = toTemplate();
         c.timeColor = timeColorF.color;
         c.pubColor = pubColorF.color;
         c.capOutline = swCapOutline.isChecked();
@@ -667,16 +659,175 @@ public class MainActivity extends Activity {
         return (((rgb >> 16) & 0xFF) * 299 + ((rgb >> 8) & 0xFF) * 587 + (rgb & 0xFF) * 114) / 1000;
     }
 
-    /** 在模板输入框的光标处插入 {日期} 这样的占位符（有选中的文字就替换掉）。 */
-    private void insertToken(String tok) {
-        int s = Math.max(0, etPubFmt.getSelectionStart());
-        int e = Math.max(0, etPubFmt.getSelectionEnd());
-        etPubFmt.getText().replace(Math.min(s, e), Math.max(s, e), tok);
+    // ------------------------------------------------------------ 发布信息的积木列表
+
+    /** 一项：tok 是「日期 / 时间 / 地点 / 省 / 市 / 换行」之一；tok 为空就是用户自己写的文字 text。 */
+    private static final class Block {
+        final String tok;
+        String text;
+
+        Block(String tok, String text) {
+            this.tok = tok;
+            this.text = text == null ? "" : text;
+        }
+    }
+
+    private static boolean isDataKey(String k) {
+        return k.equals("日期") || k.equals("时间") || k.equals("地点") || k.equals("省") || k.equals("市");
+    }
+
+    private static boolean isData(Block b) {
+        return b.tok != null && !b.tok.equals("换行");
+    }
+
+    /** 积木 → 配置里存的模板：数据项之间自动空一格，文字原样，换行写成 \n。没有内容就用默认模板。 */
+    private String toTemplate() {
+        StringBuilder sb = new StringBuilder();
+        boolean prevData = false;
+        for (Block b : blocks) {
+            if (b.tok == null) {
+                sb.append(b.text);
+                prevData = false;
+            } else if (b.tok.equals("换行")) {
+                sb.append("\\n");
+                prevData = false;
+            } else {
+                if (prevData) sb.append(' ');
+                sb.append('{').append(b.tok).append('}');
+                prevData = true;
+            }
+        }
+        String t = sb.toString();
+        return t.trim().isEmpty() ? PubFormat.DEFAULT : t;
+    }
+
+    /** 配置里存的模板 → 积木（两个数据项之间只有空白的文字，是自动加的空格，不显示成一项）。 */
+    private void parseTemplate(String tpl) {
+        blocks.clear();
+        String t = tpl == null || tpl.trim().isEmpty() ? PubFormat.DEFAULT : tpl;
+        StringBuilder lit = new StringBuilder();
+        int n = t.length();
+        for (int i = 0; i < n; ) {
+            char ch = t.charAt(i);
+            if (ch == '{') {
+                int e = t.indexOf('}', i + 1);
+                if (e > i) {
+                    String key = t.substring(i + 1, e);
+                    if (isDataKey(key)) {
+                        flushLit(lit);
+                        blocks.add(new Block(key, null));
+                        i = e + 1;
+                        continue;
+                    }
+                }
+            } else if (ch == '\\' && i + 1 < n && t.charAt(i + 1) == 'n') {
+                flushLit(lit);
+                blocks.add(new Block("换行", null));
+                i += 2;
+                continue;
+            }
+            lit.append(ch);
+            i++;
+        }
+        flushLit(lit);
+        for (int i = blocks.size() - 2; i >= 1; i--) {
+            Block b = blocks.get(i);
+            if (b.tok == null && b.text.trim().isEmpty() && isData(blocks.get(i - 1)) && isData(blocks.get(i + 1))) blocks.remove(i);
+        }
+    }
+
+    private void flushLit(StringBuilder lit) {
+        if (lit.length() > 0) {
+            blocks.add(new Block(null, lit.toString()));
+            lit.setLength(0);
+        }
+    }
+
+    /** 「+ 日期」这样的添加按钮：先执行 action（改 blocks），再重画列表和预览。 */
+    private TextView addButton(String label, final Runnable action) {
+        TextView b = pillButton(label, false);
+        b.setTextSize(14);
+        b.setOnClickListener(x -> {
+            action.run();
+            renderBlocks();
+        });
+        return b;
+    }
+
+    private TextView smallButton(String s, View.OnClickListener l) {
+        TextView b = pillButton(s, false);
+        b.setTextSize(16);
+        b.setOnClickListener(l);
+        return b;
+    }
+
+    private void renderBlocks() {
+        if (blockList == null) return;
+        blockList.removeAllViews();
+        for (int i = 0; i < blocks.size(); i++) {
+            final int idx = i;
+            final Block b = blocks.get(i);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            if (b.tok == null) {
+                EditText et = field();
+                et.setHint("输入文字，如 发布时间：");
+                et.setText(b.text); // 先设文字再挂监听，免得触发一次
+                et.addTextChangedListener(new TextWatcher() {
+                    @Override
+                    public void beforeTextChanged(CharSequence s, int st, int c, int a) {
+                    }
+
+                    @Override
+                    public void onTextChanged(CharSequence s, int st, int bf, int c) {
+                    }
+
+                    @Override
+                    public void afterTextChanged(Editable e) {
+                        b.text = e.toString();
+                        updatePubPreview();
+                    }
+                });
+                row.addView(et, new LinearLayout.LayoutParams(0, -2, 1f));
+            } else {
+                TextView name = tv(b.tok.equals("换行") ? "↵ 换行" : b.tok, 16, cText, true);
+                name.setPadding(dp(16), dp(12), dp(16), dp(12));
+                name.setBackground(round(cPrimarySoft, 0, 14));
+                row.addView(name, new LinearLayout.LayoutParams(0, -2, 1f));
+            }
+            row.addView(smallButton("↑", x -> moveBlock(idx, -1)), smallLp());
+            row.addView(smallButton("↓", x -> moveBlock(idx, 1)), smallLp());
+            row.addView(smallButton("✕", x -> removeBlock(idx)), smallLp());
+            LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-1, -2);
+            rl.bottomMargin = dp(8);
+            blockList.addView(row, rl);
+        }
+        updatePubPreview();
+    }
+
+    private LinearLayout.LayoutParams smallLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(44), dp(44));
+        lp.leftMargin = dp(6);
+        return lp;
+    }
+
+    private void moveBlock(int idx, int d) {
+        int j = idx + d;
+        if (j < 0 || j >= blocks.size()) return;
+        java.util.Collections.swap(blocks, idx, j);
+        renderBlocks();
+    }
+
+    private void removeBlock(int idx) {
+        if (idx < 0 || idx >= blocks.size()) return;
+        blocks.remove(idx);
+        renderBlocks();
     }
 
     private void updatePubPreview() {
-        if (tvPubPreview == null || etPubFmt == null) return;
-        String s = PubFormat.render(etPubFmt.getText().toString(), PREVIEW_SEC, "广西", "南宁");
+        if (tvPubPreview == null) return;
+        String s = PubFormat.render(toTemplate(), PREVIEW_SEC, "广西", "南宁");
         tvPubPreview.setText("预览：" + (s == null ? "（空，不显示）" : s));
     }
 
