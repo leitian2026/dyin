@@ -128,6 +128,8 @@ final class PubHook {
     private static final String INTRO = "com.ss.android.ugc.aweme.feed.ui.AwemeIntroInfoLayout";
     private static final int ROW_TAG = 0x7e0b0c02, OWNER_TAG = 0x7e0b0c03; // 应用自己的 tag key
     private static final String EMPTY = "";
+    /** 发布信息那一行的字色：固定，不随「文案颜色」变。 */
+    private static final int ROW_COLOR = 0xCCFFFFFF;
     private static volatile Class<?> introCls;
 
     // pub.bind：版本相关（40.7.0），类名没混淆（TextRec 的钩点签名里就是这两个名字）
@@ -487,8 +489,7 @@ final class PubHook {
         }
         row.setTag(OWNER_TAG, cap);
         row.setTextSize(TypedValue.COMPLEX_UNIT_SP, c.pubSize);
-        int color = c.capColor != 0 ? c.capColor : 0xCCFFFFFF;
-        if (row.getCurrentTextColor() != color) row.setTextColor(color);
+        if (row.getCurrentTextColor() != ROW_COLOR) row.setTextColor(ROW_COLOR); // 固定色，不跟文案颜色（capColor）走
         if (!line.contentEquals(row.getText())) row.setText(line);
         if (row.getVisibility() != View.VISIBLE) row.setVisibility(View.VISIBLE);
     }
@@ -531,10 +532,20 @@ final class PubHook {
         return l;
     }
 
-    /** 忽略空白、竖线、零宽字符，两边前 SAME_N 个有效字符都相同（至少比了 4 个，或者一方整段比完且完全相同）。 */
-    private static final int SAME_N = 12;
+    /**
+     * 文案文字 a 是不是 desc（b）这个视频的文案。两步，都忽略空白、竖线、零宽字符，都不分配对象（在 setText 回调里调用）：
+     * ①开头对齐：前 SAME_N 个有效字符相同（至少比了 4 个，或者一方整段比完且完全相同）；
+     * ②开头对不上时：desc 的前 SAME_N 个有效字符，出现在文案前 SCAN 个有效字符之内（desc 至少 MIN_IN 个有效字符）。
+     *    依据：TextRec 40.7.0（textrec-tasks-20261021-150205）里系列剧的文案控件先设「小燕子成功见到皇上 #还珠格格」（和 desc 开头相同），
+     *    再设「第11集 | 小燕子成功见到皇上 #还珠格格」（抖音在前面加了「第N集 | 」）；只比开头的话第二次就认不出，这一行会被撤掉。
+     */
+    private static final int SAME_N = 12, SCAN = 16, MIN_IN = 6;
 
     private static boolean sameStart(CharSequence a, String b) {
+        return sameHead(a, b) || containsHead(a, b);
+    }
+
+    private static boolean sameHead(CharSequence a, String b) {
         int i = 0, j = 0, n = 0;
         int la = a.length(), lb = b.length();
         while (n < SAME_N) {
@@ -547,6 +558,29 @@ final class PubHook {
             n++;
         }
         return true;
+    }
+
+    private static boolean containsHead(CharSequence a, String b) {
+        int la = a.length(), lb = b.length();
+        int need = 0;
+        for (int j = 0; j < lb && need < SAME_N; j++) if (!skip(b.charAt(j))) need++;
+        if (need < MIN_IN) return false;
+        int seen = 0;
+        for (int s = 0; s < la && seen < SCAN; s++) {
+            if (skip(a.charAt(s))) continue;
+            seen++;
+            int x = s, y = 0, n = 0;
+            while (n < need) {
+                while (x < la && skip(a.charAt(x))) x++;
+                while (y < lb && skip(b.charAt(y))) y++;
+                if (x >= la || y >= lb || a.charAt(x) != b.charAt(y)) break;
+                x++;
+                y++;
+                n++;
+            }
+            if (n == need) return true;
+        }
+        return false;
     }
 
     private static boolean skip(char c) {
