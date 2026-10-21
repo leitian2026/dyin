@@ -50,6 +50,7 @@ LSPosed 日志里会出现两种关键行（只在状态变成「放弃」「不
 | `PubHook.java` | 发布日期地点常显：钩 `DmtTextView#setText(CharSequence, BufferType)`（通用控件，回调里先看开关、再比较 `this` 的类）；播放器的换视频 / 离开事件由 `TimeHook` 转进来 |
 | `TabHook.java` | 首页顶部标签隐藏：类名按没混淆的 `HomeTopTabItemViewNew` 找（走 HookGuard），挂框架方法 `View.setContentDescription` 并按这个类过滤 |
 | `IdleExit.java` | 无操作自动退出：钩 `Activity.onUserInteraction`（框架方法，不走 HookGuard），记最后操作时刻；一条延时消息到点检查，够了结束进程 |
+| `LiveHook.java` | 直播间开播时间：钩 `LivePlayFragmentV2#onViewCreated`（记页面）和 `Room#getCreateTime`（触发刷新），文字叠在页面根控件的 ViewOverlay 上，位置按百分比放；格式在 `LiveFormat.java` |
 | `RootShell.java` | `readFile(pkg, name)` 用 root 读抖音数据目录里的文件 |
 
 ## 3. 新增一个钩子：必须做的 6 步
