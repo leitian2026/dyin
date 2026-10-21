@@ -16,6 +16,7 @@ import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -548,7 +549,11 @@ final class PubHook {
         TextView cap = r.cap;
         CharSequence cs = r.text;
         TextView row = r.pub;
-        String line = c.pubAlways && cap != null && cs != null && cs.length() > 0 ? lineFor(cs, c.pubFormat) : null;
+        String line = null;
+        if (c.pubAlways && cap != null && cs != null && cs.length() > 0) {
+            line = lineFor(cs, c.pubFormat);
+            if (line == null) line = nativeLine(intro, r, c.pubFormat); // bind 时没记到这个视频：读抖音自己放的那一行
+        }
         if (line == null) {
             if (row != null && row.getVisibility() != View.GONE) row.setVisibility(View.GONE);
             return;
@@ -589,6 +594,58 @@ final class PubHook {
         lp.topMargin = Math.round(2f * d);
         lp.bottomMargin = Math.round(4f * d);
         return lp;
+    }
+
+    /**
+     * 认不出是哪个视频（INFO 里没有）时的备用数据：抖音自己在 AwemeIntroInfoLayout 里放了一个普通 TextView（平时隐藏，展开文案时才显示），
+     * 内容是「2026-10-20 11:26:00 安徽 安庆」（TextRec 40.7.0，textrec-tasks-20261021-150205 里每个视频的容器都有）。
+     * 认得出这个格式就拆成日期、时间、省、市再套模板。自己放的两行（发布信息、时长）也是 TextView，要跳过。
+     * 局限：容器被复用时，抖音自己的这一行可能比文案晚设，短暂显示上一个视频的数据；开始播放时会按最新文字重新套一遍。
+     */
+    private static String nativeLine(ViewGroup intro, Rows r, String tpl) {
+        TextView mine = timeRef.get();
+        for (int i = 0, n = intro.getChildCount(); i < n; i++) {
+            View v = intro.getChildAt(i);
+            if (v == r.pub || v == mine || v.getClass() != TextView.class) continue;
+            String l = nativeParse(((TextView) v).getText(), tpl);
+            if (l != null) return l;
+        }
+        return null;
+    }
+
+    private static String nativeParse(CharSequence t, String tpl) {
+        if (t == null || t.length() < 19) return null;
+        for (int k = 0; k < 19; k++) {
+            char ch = t.charAt(k);
+            if (k == 4 || k == 7) {
+                if (ch != '-') return null;
+            } else if (k == 10) {
+                if (ch != ' ') return null;
+            } else if (k == 13 || k == 16) {
+                if (ch != ':') return null;
+            } else if (ch < '0' || ch > '9') {
+                return null;
+            }
+        }
+        Calendar c = Calendar.getInstance();
+        c.clear();
+        c.set(num(t, 0, 4), num(t, 5, 2) - 1, num(t, 8, 2), num(t, 11, 2), num(t, 14, 2), num(t, 17, 2));
+        String rest = t.subSequence(19, t.length()).toString().trim();
+        String prov = rest, city = null;
+        for (int i = 0; i < rest.length(); i++) {
+            if (Character.isWhitespace(rest.charAt(i))) {
+                prov = rest.substring(0, i);
+                city = rest.substring(i).trim();
+                break;
+            }
+        }
+        return PubFormat.render(tpl, c.getTimeInMillis() / 1000L, prov, city);
+    }
+
+    private static int num(CharSequence t, int from, int len) {
+        int v = 0;
+        for (int i = from; i < from + len; i++) v = v * 10 + (t.charAt(i) - '0');
+        return v;
     }
 
     /** 这段文案是哪个视频的：套那个视频的模板返回「发布信息」；认不出返回 null。结果按模板缓存在 Info 里，模板变了才重算。 */
@@ -754,6 +811,7 @@ final class PubHook {
                     r.text = ((TextView) f).getText();
                 }
             }
+            if (r.cap != null) updatePub(g, r);
             return;
         }
         if (v instanceof ViewGroup) {
@@ -773,6 +831,33 @@ final class PubHook {
             }
         }
         return null;
+    }
+
+    /** 当前界面里的 AwemeIntroInfoLayout 全扫一遍并登记（hook 装得晚，容器的文案早就设过了）。 */
+    private static void scanAll() {
+        Class<?> ic = introCls;
+        Activity a = CommentHook.top.get();
+        if (ic == null || !isHostActivity(a)) return;
+        scanIntros(a.getWindow().getDecorView(), ic);
+    }
+
+    /**
+     * 开始播放时：已经见过的容器按它们现在的文字重新套一遍发布信息。文案可能在 bind 之前设过（当时认不出视频），
+     * 抖音自己的发布时间那一行也可能刚设好；每个容器只看自己的文案和自己的那一行，所以邻近页的也一起更新、不会串。
+     */
+    private static void syncAll() {
+        for (int i = INTROS.size() - 1; i >= 0; i--) {
+            ViewGroup g = INTROS.get(i).get();
+            if (g == null) {
+                INTROS.remove(i);
+                continue;
+            }
+            Rows r = rowsOf(g, false);
+            if (r == null || r.cap == null) continue;
+            CharSequence now = r.cap.getText();
+            if (now != null && now.length() > 0) r.text = now;
+            updatePub(g, r);
+        }
     }
 
     /** 回到前台（配置刚重读过）：已经见过的容器按新配置（开关、模板、字号、颜色）重新套一遍。 */
@@ -984,6 +1069,10 @@ final class PubHook {
         ViewGroup g = DanmakuHook.cfg.timeAlways && curDesc != null ? locateCurrent() : null;
         curIntro = g == null ? NO_INTRO : new WeakReference<>(g);
         locateTries = 3;
+        if (DanmakuHook.cfg.pubAlways) {
+            if (INTROS.isEmpty()) scanAll();
+            syncAll();
+        }
         refreshCaption(CommentHook.top.get());
     }
 
