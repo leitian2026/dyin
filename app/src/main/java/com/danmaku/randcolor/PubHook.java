@@ -3,11 +3,12 @@ package com.danmaku.randcolor;
 import android.app.Activity;
 import android.graphics.Rect;
 import android.os.Looper;
-import android.text.SpannableStringBuilder;
-import android.text.Spanned;
-import android.text.style.AbsoluteSizeSpan;
+import android.text.TextUtils;
+import android.util.TypedValue;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
@@ -93,14 +94,26 @@ import de.robv.android.xposed.XposedBridge;
  *  - 这条 setText 的设置栈（TextRec，textrec-tasks-20261021-103536 的 #1）：DmtTextView.setText ← ScrollMentionTextView.setText ← TextView.setText
  *    ← lambda ← Handler（异步投递，不在 bind 里同步调用），所以不能靠「bind 期间」认视频，只能按文案文字认：文字开头和某个视频的 Aweme.desc 相同。
  *    比较时忽略空白和竖线（截图 1 的文案「第42集 | 敦亲王…」带空格和竖线，只比前 16 个字符会对不上），只比前 12 个有效字符。
- *  - 抖音点「展开」时自己会在文案末尾加「日期 地点」（见上面 pub.text 的依据，tail() 认得出），这时不再重复追加。
+ *  - 抖音点「展开」时自己会在文案末尾加「日期 地点」（见上面 pub.text 的依据）。1.21.0 起发布信息是单独一行，不再往文案里追加，展开与否都显示。
  *  - 没有证据的部分：①文案控件有没有 maxLines 限制（有的话收起状态下多出来的这一行可能被截掉）；②图中「抖音精选内容」那种视频的文案
  *    是不是同样的两个类；③第一个视频如果在 pub.bind 挂上之前就设好了文案，要等下一次 setText（划走再划回、展开 / 收起）才会带上这一行。
  *  - 字号：用 RelativeSizeSpan(0.9)，跟着文案走；位置浮窗里的位置和字号不再对这行起作用（浮窗只留着一个示例）。
  *
  * 1.20.5：发布信息只剩「并进文案」这一条路。单独画的浮层、位置浮窗（TimePanel 的 PUB 目标）、pubX / pubY 都删了；
  * 下面几段里讲「自己画一行 / 窗口坐标 / 浮窗调位置」的是历史依据，只有「认视频」「文案控件是哪两个类」「pub.anchor 用来改文案样式」仍在用。
- * 追加那一行的字号 = pubSize（sp，AbsoluteSizeSpan），在设置页调。
+ * 发布信息那一行的字号 = pubSize（sp），在设置页调（1.21.0 起是单独一行的 TextView.setTextSize）。
+ *
+ * 1.21.0：发布信息改成「单独一行」，放在作者声明那一行的位置（取代上面「并进文案」的做法，文案文字不再被改）。
+ *  - 依据（TextRec 视图树导出，40.7.0，textrec-tasks-20261021-143719 的视图树 #2 / #4，各取一个有声明和一个没声明的视频）：
+ *    文案（FeedDescRootLayout，类名没混淆）和作者声明那一行（LinearLayout#jbz，里面是 FeedWarnForceCenterTextView）都是
+ *    com.ss.android.ugc.aweme.feed.ui.AwemeIntroInfoLayout（竖直 LinearLayout，类名没混淆）的子控件，文案在前、声明行在后，
+ *    两者之间只有高度 0 的空容器。有声明的视频比没声明的多一个子控件（就是 #jbz，没声明时它不存在，不是被隐藏）。
+ *  - 做法：文案控件每次 setText（DmtTextView#setText 钩子的 after），沿父级往上找 AwemeIntroInfoLayout，在文案所在的那个直接子控件
+ *    后面插入一个 TextView，显示 format()。有声明时它就在声明行上方；没声明时声明行不存在，它就在声明行本来的位置。
+ *    这一行按文案文字认视频（和 desc 开头相同），认不出 / 开关关了 / 文案被清空就设成 GONE；同一个 AwemeIntroInfoLayout 里有两个文案控件时，
+ *    只有最后设置这一行的那个控件才能把它撤掉（owner）。
+ *  - 没有证据的部分：①抖音往这个容器里加声明行时用的是绝对下标还是相对某个控件的位置（这次导出里没有 addView 记录）。本模块的这一行插在文案后面第一个位置，
+ *    声明行（原来在文案后面第 7 个）无论哪种方式都还在它后面；②抖音有没有按下标取这个容器的子控件。
  *
  * 没有定时器 / 轮询：文字只在上面的回调里更新或隐藏。
  */
@@ -111,8 +124,11 @@ final class PubHook {
     private static final String DMT = "com.bytedance.ies.dmt.ui.widget.DmtTextView";
     private static final String MENTION = "com.ss.android.ugc.aweme.views.MentionTextView";
     private static final String CAPTION = "com.ss.android.ugc.aweme.feed.desc.ui.ScrollMentionTextView";
-    /** 结尾「日期 地点」最多看多少个字符。 */
-    private static final int MAX_TAIL = 40;
+    /** pub.row：作者声明和文案所在的竖直容器（40.7.0，类名没混淆，见文件头的依据）。 */
+    private static final String INTRO = "com.ss.android.ugc.aweme.feed.ui.AwemeIntroInfoLayout";
+    private static final int ROW_TAG = 0x7e0b0c02, OWNER_TAG = 0x7e0b0c03; // 应用自己的 tag key
+    private static final String EMPTY = "";
+    private static volatile Class<?> introCls;
 
     // pub.bind：版本相关（40.7.0），类名没混淆（TextRec 的钩点签名里就是这两个名字）
     private static final String HOLDER = "com.ss.android.ugc.aweme.feed.adapter.VideoViewHolder";
@@ -191,6 +207,7 @@ final class PubHook {
     private static final class Info {
         final long sec;
         final String ip, city, desc;
+        String line; // format() 的结果，第一次用到时算一次
 
         Info(long sec, String ip, String city, String desc) {
             this.sec = sec;
@@ -241,6 +258,7 @@ final class PubHook {
         tryText(cl, ctx);
         tryBind(cl, ctx);
         tryAnchor(cl, ctx);
+        tryRow(cl, ctx);
         tryDraw(cl, ctx);
     }
 
@@ -321,6 +339,15 @@ final class PubHook {
         capMention = m;
         captionCls = c;
         HookGuard.ok(HookGuard.PUB_ANCHOR, "");
+    }
+
+    /** pub.row：只找 AwemeIntroInfoLayout 这个类（不挂钩）；找不到就不显示这一行，抖音原来的界面不变。 */
+    private static void tryRow(ClassLoader cl, ClassLoader ctx) {
+        if (HookGuard.settled(HookGuard.PUB_ROW)) return;
+        Class<?> c = HookGuard.find(HookGuard.PUB_ROW, INTRO, cl, ctx);
+        if (c == null) return;
+        introCls = c;
+        HookGuard.ok(HookGuard.PUB_ROW, "");
     }
 
     /**
@@ -408,41 +435,83 @@ final class PubHook {
     // ------------------------------------------------------------ 钩子
 
     private static final class Hook extends XC_MethodHook {
-        /** 文案控件设文字之前：把「日期 地点」作为最后一行并进去（只有认出是某个视频的文案才动；回调里只有这一次分配）。 */
-        @Override
-        protected void beforeHookedMethod(MethodHookParam p) {
-            try {
-                if (!DanmakuHook.cfg.pubAlways) return;
-                Object self = p.thisObject;
-                if (self == null || p.args == null || p.args.length == 0 || !(p.args[0] instanceof CharSequence)) return;
-                Class<?> sk = self.getClass();
-                if (sk != capMention && sk != captionCls) return;
-                CharSequence cs = (CharSequence) p.args[0];
-                if (cs.length() == 0 || tail(cs) != null) return; // 空文字 / 抖音自己已经带了日期地点（展开）
-                String line = lineFor(cs);
-                if (line == null || endsWith(cs, line)) return;
-                SpannableStringBuilder b = new SpannableStringBuilder(cs);
-                int st = b.length() + 1;
-                b.append('\n').append(line);
-                b.setSpan(new AbsoluteSizeSpan(DanmakuHook.cfg.pubSize, true), st, b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE); // 字号（sp）在设置页调
-                p.args[0] = b;
-            } catch (Throwable ignored) {
-            }
-        }
-
-        /** 文案控件刚设了文字：只用来给文案设字色 / 黑边（发布信息已经在 before 里并进文字了）。 */
+        /** 文案控件刚设了文字：更新发布信息那一行（在作者声明上方），再按需要设文案的字色 / 黑边。 */
         @Override
         protected void afterHookedMethod(MethodHookParam p) {
             try {
                 Object self = p.thisObject;
-                if (self == null || !styleOn() || !isMain()) return;
+                if (self == null || p.args == null || p.args.length == 0 || !(self instanceof TextView)) return;
                 Class<?> sk = self.getClass();
-                if ((sk == capMention || sk == captionCls) && p.args[0] instanceof CharSequence && self instanceof TextView) {
-                    onCaptionText((TextView) self, (CharSequence) p.args[0]);
-                }
+                if (sk != capMention && sk != captionCls) return;
+                if (!isMain()) return;
+                CharSequence cs = p.args[0] instanceof CharSequence ? (CharSequence) p.args[0] : EMPTY;
+                showRow((TextView) self, cs);
+                if (styleOn()) onCaptionText((TextView) self, cs);
             } catch (Throwable ignored) {
             }
         }
+    }
+
+    /**
+     * 发布信息这一行（见文件头 1.21.0）：文案控件 cap 刚设了文字 cs。沿父级找 AwemeIntroInfoLayout，行放在文案所在的直接子控件后面。
+     * 能认出是某个视频的文案 → 显示它的「日期 地点」；认不出 / 开关关着 / 文案是空的 → 只有这一行是 cap 设的才撤掉。主线程调用。
+     */
+    private static void showRow(TextView cap, CharSequence cs) {
+        Class<?> ic = introCls;
+        if (ic == null) return;
+        ViewGroup intro = null;
+        View child = cap;
+        for (int d = 0; d < 8; d++) {
+            ViewParent par = child.getParent();
+            if (par == null) return;
+            if (ic.isInstance(par)) {
+                intro = (ViewGroup) par;
+                break;
+            }
+            if (!(par instanceof View)) return;
+            child = (View) par;
+        }
+        if (intro == null) return;
+        Object tag = intro.getTag(ROW_TAG);
+        TextView row = tag instanceof TextView ? (TextView) tag : null;
+        DanmakuConfig c = DanmakuHook.cfg;
+        String line = c.pubAlways && cs.length() > 0 ? lineFor(cs) : null;
+        if (line == null) {
+            if (row != null && row.getTag(OWNER_TAG) == cap && row.getVisibility() != View.GONE) row.setVisibility(View.GONE);
+            return;
+        }
+        if (row == null || row.getParent() != intro) {
+            row = newRow(cap);
+            intro.setTag(ROW_TAG, row);
+            intro.addView(row, intro.indexOfChild(child) + 1);
+        }
+        row.setTag(OWNER_TAG, cap);
+        row.setTextSize(TypedValue.COMPLEX_UNIT_SP, c.pubSize);
+        int color = c.capColor != 0 ? c.capColor : 0xCCFFFFFF;
+        if (row.getCurrentTextColor() != color) row.setTextColor(color);
+        if (!line.contentEquals(row.getText())) row.setText(line);
+        if (row.getVisibility() != View.VISIBLE) row.setVisibility(View.VISIBLE);
+    }
+
+    /** 新建这一行：单行、一圈黑边；左边距和文案对齐（取文案父控件的 leftMargin），宽度按文字。 */
+    private static TextView newRow(TextView cap) {
+        TextView t = new TextView(cap.getContext());
+        t.setSingleLine(true);
+        t.setEllipsize(TextUtils.TruncateAt.END);
+        float d = t.getResources().getDisplayMetrics().density;
+        t.setShadowLayer(3f * d, 0f, 0f, 0xFF000000);
+        int left = 0;
+        ViewParent cp = cap.getParent();
+        if (cp instanceof View) {
+            ViewGroup.LayoutParams lp = ((View) cp).getLayoutParams();
+            if (lp instanceof ViewGroup.MarginLayoutParams) left = ((ViewGroup.MarginLayoutParams) lp).leftMargin;
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = left > 0 ? left : Math.round(12f * d);
+        lp.topMargin = Math.round(2f * d);
+        lp.bottomMargin = Math.round(4f * d);
+        t.setLayoutParams(lp);
+        return t;
     }
 
     /** 这段文案是哪个视频的：开头和某个视频的 desc 相同（忽略空白和竖线），返回那个视频的「日期 地点」；认不出返回 null。 */
@@ -456,7 +525,10 @@ final class PubHook {
                 }
             }
         }
-        return hit == null ? null : format(hit);
+        if (hit == null) return null;
+        String l = hit.line;
+        if (l == null) hit.line = l = format(hit);
+        return l;
     }
 
     /** 忽略空白、竖线、零宽字符，两边前 SAME_N 个有效字符都相同（至少比了 4 个，或者一方整段比完且完全相同）。 */
@@ -479,39 +551,6 @@ final class PubHook {
 
     private static boolean skip(char c) {
         return Character.isWhitespace(c) || c == '|' || c == '\uFF5C' || c == '\u4E28' || c == '\u200B' || c == '\u00A0';
-    }
-
-    private static boolean endsWith(CharSequence cs, String s) {
-        int n = cs.length(), m = s.length();
-        if (n < m) return false;
-        for (int k = 0; k < m; k++) if (cs.charAt(n - m + k) != s.charAt(k)) return false;
-        return true;
-    }
-
-    /**
-     * 取文字结尾的「日期 地点」。结尾是 4 个空格 + 日期 + 空格 + 地点（地点可有可无）。
-     * 日期只认追踪里见过的写法：第一个字符是数字、最后一个字符是「前」或「日」（"3天前" "39分钟前" "10月10日"）。
-     * 不认的写法（比如"昨天"）返回 null，什么都不显示。只在确认是日期之后才分配字符串。
-     */
-    private static String tail(CharSequence cs) {
-        int n = cs.length();
-        int lo = Math.max(0, n - MAX_TAIL);
-        int sep = -1;
-        for (int i = n - 4; i >= lo; i--) {
-            if (cs.charAt(i) == ' ' && cs.charAt(i + 1) == ' ' && cs.charAt(i + 2) == ' ' && cs.charAt(i + 3) == ' ') {
-                sep = i + 4; // 最靠后的一段空格的结尾
-                break;
-            }
-        }
-        if (sep < 0 || sep >= n) return null;
-        int e = sep;
-        while (e < n && cs.charAt(e) != ' ') e++; // 日期这一段的结尾
-        char first = cs.charAt(sep);
-        char last = cs.charAt(e - 1);
-        if (first < '0' || first > '9') return null;
-        if (last != '前' && last != '日') return null;
-        String s = cs.subSequence(sep, n).toString().trim();
-        return s.isEmpty() ? null : s;
     }
 
     /**
