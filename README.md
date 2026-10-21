@@ -22,6 +22,11 @@
 1. LSPosed 启用模块，作用域勾选抖音，强杀抖音重开。
 2. 打开模块设置，点「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
+## 1.20.1：修构建错误（PubHook 缺 tryText）
+- **问题**：构建报 `PubHook.java:208: cannot find symbol: method tryText(ClassLoader,ClassLoader)`。`PubHook.tryHook` 里调用了 `tryText`，但 `PubHook.java` 里没有它的定义（上传的 1.19.1 压缩包里就已经是这样，不是 1.20.0 的改动引起的）。
+- **做法**：补上 `tryText`：先找 `MentionTextView`（找不到走 `waitFail`），记下 `mentionCls`，再用 `HookGuard.hook` 挂 `DmtTextView` 里 `setText(CharSequence, TextView$BufferType)`（没匹配走 `miss`）。写法照 1.18.0 的说明（见下面 1.18.0 一节）。
+- **局限**：这是按 README 和 `PubHook` 里现有的常量（`DMT` / `MENTION` / `SET_TEXT` / `HOOK`）还原的，没有编译、没有上机；如果你仓库里原来有 `tryText`，以你的为准。
+
 ## 1.20.0：双击改评论多一条名字没混淆的路径
 - **新增两个钩子**（`HookGuard` 编号 11 / 12，设置页「双击改评论：识别双击（系统方法）」「双击改评论：拦在点赞之前」，挂在 `CommentHook.tryHook` 里，它本来就在 `DanmakuHook.init` 和 `hookResume` 两处调用）：
   - `dtap.seen`：`android.view.GestureDetector$SimpleOnGestureListener#onDoubleTap(MotionEvent)`（系统方法）；
