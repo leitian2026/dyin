@@ -18,14 +18,16 @@ public final class DanmakuConfig {
     public boolean likeBtnToComment = false;
     /** 双击视频时，不点赞、不出红心，改为打开评论。 */
     public boolean dtapToComment = false;
-    /** 视频时长一直显示（自己画一行 00:12 / 03:45）。 */
+    /** 视频时长一直显示（放在发布信息那一行的下面，没显示发布信息就放在文案下面）。 */
     public boolean timeAlways = false;
-    /** 时长文字相对屏幕正中的偏移，单位 px。右、下为正。（1.16 起由 dp 改为 px，键名也换了，旧值不再使用） */
-    public int timeX = 0, timeY = 0;
-    /** 发布日期和地点一直显示（并进视频文案的最后一行）。 */
+    /** 发布日期和地点一直显示（在文案下面单独一行）。 */
     public boolean pubAlways = false;
-    /** 时长文字 / 发布信息那一行的字号，单位 sp（时长在位置浮窗里调，发布信息在设置页调）。默认 = 以前写死的 20 / 16。 */
+    /** 发布信息那一行的模板，见 PubFormat：{日期} {时间} {地点} {省} {市} 可以随意排顺序、夹文字，不限长度。 */
+    public String pubFormat = PubFormat.DEFAULT;
+    /** 时长文字 / 发布信息那一行的字号，单位 sp（在设置页调）。默认 = 以前写死的 20 / 16。 */
     public int timeSize = 20, pubSize = 16;
+    /** 时长文字 / 发布信息那一行的颜色（0xAARRGGBB，不透明）；0 = 默认（时长白色，发布信息半透明白）。和视频文案的颜色互不影响。 */
+    public int timeColor = 0, pubColor = 0;
     /** 视频文案加黑色描边（用阴影层画一圈黑边）。关掉后要重启抖音才恢复。 */
     public boolean capOutline = false;
     /** 视频文案的颜色（0xAARRGGBB，不透明）；0 = 不改，用抖音原来的颜色。话题、@ 这类抖音自己上色的文字不受影响。 */
@@ -35,8 +37,6 @@ public final class DanmakuConfig {
     public String[] hiddenTabs = new String[0];
     /** 无操作多少分钟后结束抖音进程；0 = 关闭。回到前台、触摸、按键都算一次操作。 */
     public int idleExitMin = 0;
-    /** 一次性请求：抖音回到前台时弹出「位置浮窗」，弹出后立即被抖音清掉。 */
-    public boolean timeAdjust = false;
 
     public String toText() {
         try {
@@ -46,12 +46,12 @@ public final class DanmakuConfig {
             p.setProperty("likeBtnToComment", String.valueOf(likeBtnToComment));
             p.setProperty("dtapToComment", String.valueOf(dtapToComment));
             p.setProperty("timeAlways", String.valueOf(timeAlways));
-            p.setProperty("timeX", String.valueOf(timeX));
-            p.setProperty("timeY", String.valueOf(timeY));
-            p.setProperty("timeAdjust", String.valueOf(timeAdjust));
             p.setProperty("pubAlways", String.valueOf(pubAlways));
             p.setProperty("timeSize", String.valueOf(timeSize));
             p.setProperty("pubSize", String.valueOf(pubSize));
+            p.setProperty("pubFormat", pubFormat == null ? PubFormat.DEFAULT : pubFormat);
+            p.setProperty("timeColor", String.valueOf(timeColor));
+            p.setProperty("pubColor", String.valueOf(pubColor));
             p.setProperty("capOutline", String.valueOf(capOutline));
             p.setProperty("capColor", String.valueOf(capColor));
             p.setProperty("idleExitMin", String.valueOf(idleExitMin));
@@ -94,19 +94,15 @@ public final class DanmakuConfig {
         c.likeBtnToComment = Boolean.parseBoolean(p.getProperty("likeBtnToComment", "false").trim());
         c.dtapToComment = Boolean.parseBoolean(p.getProperty("dtapToComment", "false").trim());
         c.timeAlways = Boolean.parseBoolean(p.getProperty("timeAlways", "false").trim());
-        c.timeX = parseOffset(p.getProperty("timeX", "0"));
-        c.timeY = parseOffset(p.getProperty("timeY", "0"));
-        c.timeAdjust = Boolean.parseBoolean(p.getProperty("timeAdjust", "false").trim());
         c.pubAlways = Boolean.parseBoolean(p.getProperty("pubAlways", "false").trim());
         c.timeSize = parseSize(p.getProperty("timeSize", "20"), 20);
         c.pubSize = parseSize(p.getProperty("pubSize", "16"), 16);
         c.capOutline = Boolean.parseBoolean(p.getProperty("capOutline", "false").trim());
-        try {
-            int col = (int) Long.parseLong(p.getProperty("capColor", "0").trim());
-            c.capColor = col == 0 ? 0 : (col | 0xFF000000);
-        } catch (Throwable t) {
-            c.capColor = 0;
-        }
+        c.capColor = parseColor(p.getProperty("capColor", "0"));
+        c.timeColor = parseColor(p.getProperty("timeColor", "0"));
+        c.pubColor = parseColor(p.getProperty("pubColor", "0"));
+        String fmt = p.getProperty("pubFormat", PubFormat.DEFAULT);
+        c.pubFormat = fmt == null || fmt.trim().isEmpty() ? PubFormat.DEFAULT : fmt;
         List<String> tabs = split(p.getProperty("hiddenTabs", ""));
         c.hiddenTabs = tabs.toArray(new String[0]);
         try {
@@ -129,9 +125,11 @@ public final class DanmakuConfig {
         }
     }
 
-    private static int parseOffset(String v) {
+    /** 颜色：0 = 不改 / 默认；其他一律补成不透明。读不懂当 0。 */
+    private static int parseColor(String v) {
         try {
-            return Math.max(-4000, Math.min(4000, Integer.parseInt(v.trim())));
+            int col = (int) Long.parseLong(v.trim());
+            return col == 0 ? 0 : (col | 0xFF000000);
         } catch (Throwable t) {
             return 0;
         }
