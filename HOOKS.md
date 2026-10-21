@@ -160,7 +160,7 @@ FooHook.tryHook(cl);
 ## 5. 什么时候不用走 `HookGuard`
 
 - 钩 **Android 框架 / Java 标准库**里一定存在的方法，例如 `DanmakuHook.hookResume` 里的 `Activity.onResume`、`IdleExit.install` 里的 `Activity.onUserInteraction`、`TabHook` 里的 `View.setContentDescription`（后者必须先用 `HookGuard.find` 确认抖音的目标类存在才挂，找不到类就不挂这个全局钩子）。
-- 不是钩子的功能：设置页、配置读写、`TimePanel` 浮窗、`RootShell`。
+- 不是钩子的功能：设置页、配置读写、`PubFormat`（发布信息模板）、`RootShell`。
 - 这两类之外，一律走 `HookGuard`。
 
 ## 6. 提交前自测清单（逐条打勾）
