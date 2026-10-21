@@ -2,16 +2,12 @@ package com.danmaku.randcolor;
 
 import android.app.Activity;
 import android.graphics.Rect;
-import android.graphics.Typeface;
-import android.os.Handler;
 import android.os.Looper;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
-import android.text.style.RelativeSizeSpan;
-import android.view.Gravity;
+import android.text.style.AbsoluteSizeSpan;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
@@ -102,6 +98,10 @@ import de.robv.android.xposed.XposedBridge;
  *    是不是同样的两个类；③第一个视频如果在 pub.bind 挂上之前就设好了文案，要等下一次 setText（划走再划回、展开 / 收起）才会带上这一行。
  *  - 字号：用 RelativeSizeSpan(0.9)，跟着文案走；位置浮窗里的位置和字号不再对这行起作用（浮窗只留着一个示例）。
  *
+ * 1.20.5：发布信息只剩「并进文案」这一条路。单独画的浮层、位置浮窗（TimePanel 的 PUB 目标）、pubX / pubY 都删了；
+ * 下面几段里讲「自己画一行 / 窗口坐标 / 浮窗调位置」的是历史依据，只有「认视频」「文案控件是哪两个类」「pub.anchor 用来改文案样式」仍在用。
+ * 追加那一行的字号 = pubSize（sp，AbsoluteSizeSpan），在设置页调。
+ *
  * 没有定时器 / 轮询：文字只在上面的回调里更新或隐藏。
  */
 final class PubHook {
@@ -111,7 +111,6 @@ final class PubHook {
     private static final String DMT = "com.bytedance.ies.dmt.ui.widget.DmtTextView";
     private static final String MENTION = "com.ss.android.ugc.aweme.views.MentionTextView";
     private static final String CAPTION = "com.ss.android.ugc.aweme.feed.desc.ui.ScrollMentionTextView";
-    private static final String PLACEHOLDER = "2026-10-19 11:50:00 广西 南宁";
     /** 结尾「日期 地点」最多看多少个字符。 */
     private static final int MAX_TAIL = 40;
 
@@ -156,7 +155,6 @@ final class PubHook {
     /** 最多记多少个视频（feed 无限滚动，只留最近的，当前视频和左右预加载的都在里面）。 */
     private static final int MAX_INFO = 48;
 
-    private static final Handler MAIN = new Handler(Looper.getMainLooper()); // 只用来把非主线程的事件转回主线程
     private static final XC_MethodHook HOOK = new Hook();
 
     private static final HookGuard.Filter SET_TEXT = new HookGuard.Filter() {
@@ -209,14 +207,9 @@ final class PubHook {
             return size() > MAX_INFO;
         }
     };
-    private static WeakReference<TextView> viewRef = new WeakReference<>(null);
 
     // 状态（都在主线程用）
     private static String curId;
-    private static String lastText = "";
-    private static boolean lastAnch;
-    private static int lastSize;
-    private static int lastGx = Integer.MIN_VALUE, lastGy = Integer.MIN_VALUE;
 
     /** 文案开头比较多少个字符。 */
     private static final int DESC_CMP = 16;
@@ -236,8 +229,6 @@ final class PubHook {
         public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
             if (l == ol && t == ot && r == or && b == ob) return;
             styleCaption(v);
-            TextView tv = viewRef.get();
-            if (tv != null && tv.getParent() != null) applyOffset(tv);
         }
     };
 
@@ -414,11 +405,6 @@ final class PubHook {
         return Looper.myLooper() == Looper.getMainLooper();
     }
 
-    /** 文字是否应该存在：设置里开了，或者位置浮窗正在调它（调位置时即使没开也要看得到）。 */
-    private static boolean enabled() {
-        return DanmakuHook.cfg.pubAlways || (TimePanel.isOpen() && TimePanel.target() == TimePanel.PUB);
-    }
-
     // ------------------------------------------------------------ 钩子
 
     private static final class Hook extends XC_MethodHook {
@@ -438,38 +424,21 @@ final class PubHook {
                 SpannableStringBuilder b = new SpannableStringBuilder(cs);
                 int st = b.length() + 1;
                 b.append('\n').append(line);
-                b.setSpan(new RelativeSizeSpan(0.9f), st, b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                b.setSpan(new AbsoluteSizeSpan(DanmakuHook.cfg.pubSize, true), st, b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE); // 字号（sp）在设置页调
                 p.args[0] = b;
             } catch (Throwable ignored) {
             }
         }
 
+        /** 文案控件刚设了文字：只用来给文案设字色 / 黑边（发布信息已经在 before 里并进文字了）。 */
         @Override
         protected void afterHookedMethod(MethodHookParam p) {
             try {
                 Object self = p.thisObject;
-                if (self == null) return;
+                if (self == null || !styleOn() || !isMain()) return;
                 Class<?> sk = self.getClass();
-                if ((sk == capMention || sk == captionCls) && p.args[0] instanceof CharSequence && self instanceof TextView
-                        && (styleOn() || enabled()) && isMain()) {
+                if ((sk == capMention || sk == captionCls) && p.args[0] instanceof CharSequence && self instanceof TextView) {
                     onCaptionText((TextView) self, (CharSequence) p.args[0]);
-                }
-                if (!enabled()) return;
-                Class<?> k = mentionCls;
-                if (k == null || sk != k) return; // 只处理 MentionTextView 本身
-                Object a = p.args[0];
-                if (!(a instanceof CharSequence)) return;
-                final String tail = tail((CharSequence) a);
-                if (tail == null) return;
-                if (isMain()) {
-                    onCaptured(tail);
-                } else {
-                    MAIN.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            onCaptured(tail);
-                        }
-                    });
                 }
             } catch (Throwable ignored) {
             }
@@ -554,7 +523,7 @@ final class PubHook {
         @Override
         protected void beforeHookedMethod(MethodHookParam p) {
             try {
-                if (!enabled() && !styleOn()) return;
+                if (!DanmakuHook.cfg.pubAlways && !styleOn()) return;
                 Field fa = fAid, ft = fTime;
                 Object aw = p.args[0];
                 if (fa == null || ft == null || aw == null) return;
@@ -581,11 +550,8 @@ final class PubHook {
                         rebuildDescs();
                     }
                 }
-                // onPlaying 比 bind 先到的情况（这个视频已经在播）：补显示；预加载的邻近视频 id 对不上，什么都不做
-                if (isMain() && aid.equals(curId)) {
-                    if (curDesc == null) curDesc = known.desc;
-                    if (!TimePanel.isOpen()) showInfo(known);
-                }
+                // onPlaying 比 bind 先到的情况（这个视频已经在播）：补上 desc；预加载的邻近视频 id 对不上，什么都不做
+                if (isMain() && aid.equals(curId) && curDesc == null) curDesc = known.desc;
             } catch (Throwable ignored) {
             }
         }
@@ -633,11 +599,6 @@ final class PubHook {
         if (styleOn() && matchesAny(cs)) styleCaption(t);
     }
 
-    private static void showInfo(Info r) {
-        if (!enabled()) return;
-        show(CommentHook.top.get(), format(r));
-    }
-
     /** 发布时间 → 「2026-10-19 11:50:00 广西 南宁」（createTime 是秒级时间戳，按手机时区；后面是省和市，有才写）。 */
     private static String format(Info r) {
         Calendar c = Calendar.getInstance();
@@ -680,10 +641,6 @@ final class PubHook {
         return b.append(v);
     }
 
-    private static void onCaptured(String text) {
-        show(CommentHook.top.get(), text);
-    }
-
     // ------------------------------------------------------------ 视频切换（由 TimeHook 里已有的播放器监听转进来，主线程）
 
     /**
@@ -698,7 +655,6 @@ final class PubHook {
             r = INFO.get(id);
         }
         curDesc = r == null ? null : r.desc;
-        if (!TimePanel.isOpen()) hideNow(); // 发布信息已经并进文案文字里（见文件头），不再单独画浮层
         refreshCaption(CommentHook.top.get());
     }
 
@@ -707,117 +663,12 @@ final class PubHook {
         if (id == null || !id.equals(curId)) return;
         curId = null;
         curDesc = null;
-        if (!TimePanel.isOpen()) hideNow();
     }
 
-    // ------------------------------------------------------------ 显示
+    // ------------------------------------------------------------ 文案样式
 
     private static boolean isHostActivity(Activity a) {
         return a != null && !a.isFinishing() && !a.isDestroyed();
-    }
-
-    /** 位置浮窗打开时调用：没有捕获到文字也先画一个示例，好边调边看。 */
-    static void showSample(Activity a) {
-        show(a, lastText.isEmpty() ? PLACEHOLDER : lastText);
-    }
-
-    private static void show(Activity a, String text) {
-        if (!isHostActivity(a)) return;
-        // 发布信息并进文案文字里了：这个浮层只在位置浮窗打开时画一个示例
-        if (!(TimePanel.isOpen() && TimePanel.target() == TimePanel.PUB)) return;
-        TextView t = viewRef.get();
-        ViewGroup decor = (ViewGroup) a.getWindow().getDecorView();
-        float d = a.getResources().getDisplayMetrics().density;
-        if (t != null && t.getContext() != a) { // 换了 Activity：旧的拿掉重建
-            clearAnchor();
-            detach(t);
-            t = null;
-        }
-        if (t == null) {
-            t = new TextView(a);
-            t.setTypeface(Typeface.DEFAULT_BOLD);
-            t.setTextColor(0xFFFFFFFF);
-            t.setShadowLayer(5f * d, 0f, 0f, 0xFF000000); // 黑色描边感，亮暗背景都看得清
-            t.setIncludeFontPadding(false);
-            t.setClickable(false);
-            t.setFocusable(false);
-            t.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-            viewRef = new WeakReference<>(t);
-            lastText = "";
-            lastGx = lastGy = Integer.MIN_VALUE;
-            lastSize = 0;
-        }
-        View panel = TimePanel.view();
-        boolean moved = false;
-        if (t.getParent() != decor) {
-            detach(t);
-            decor.addView(t, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
-            lastGx = lastGy = Integer.MIN_VALUE; // 新的布局参数，下一次 applyOffset 一定重放
-            moved = true;
-        } else {
-            View last = decor.getChildAt(decor.getChildCount() - 1);
-            if (last != t && last != panel) {
-                t.bringToFront();
-                moved = true;
-            }
-        }
-        if (moved && panel != null && panel.getParent() == decor) panel.bringToFront(); // 浮窗始终压在文字上面
-        bindAnchor(decor);
-        applySize(t);
-        applyOffset(t);
-        if (!text.equals(lastText)) {
-            lastText = text;
-            t.setText(text);
-        }
-        if (t.getVisibility() != View.VISIBLE) t.setVisibility(View.VISIBLE);
-    }
-
-    /** 字号（sp）：有变化才设。 */
-    private static void applySize(TextView t) {
-        int sz = DanmakuHook.cfg.pubSize;
-        if (sz == lastSize) return;
-        lastSize = sz;
-        t.setTextSize(sz);
-    }
-
-    /** 位置浮窗里点 − / + 或拖字号滑动条时实时生效。 */
-    static void applySizeNow() {
-        TextView t = viewRef.get();
-        if (t != null) applySize(t);
-    }
-
-    /** 有文案锚点：放在文案左下角 + (pubX, pubY)（窗口坐标，用 margin）；没有：屏幕中心 + (pubX, pubY)（用 translation）。 */
-    private static void applyOffset(TextView t) {
-        DanmakuConfig c = DanmakuHook.cfg;
-        View an = anchorRef.get();
-        boolean anch = an != null && an.isAttachedToWindow() && an.getVisibility() == View.VISIBLE;
-        int gx = c.pubX, gy = c.pubY;
-        if (anch) {
-            an.getLocationInWindow(LOC);
-            gx += LOC[0] + an.getPaddingLeft();
-            gy += LOC[1] + an.getHeight();
-        }
-        if (anch == lastAnch && gx == lastGx && gy == lastGy) return;
-        ViewGroup.LayoutParams p = t.getLayoutParams();
-        if (!(p instanceof FrameLayout.LayoutParams)) return;
-        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) p;
-        lastAnch = anch;
-        lastGx = gx;
-        lastGy = gy;
-        if (anch) {
-            lp.gravity = Gravity.TOP | Gravity.LEFT;
-            lp.leftMargin = gx;
-            lp.topMargin = gy;
-            t.setTranslationX(0f);
-            t.setTranslationY(0f);
-        } else {
-            lp.gravity = Gravity.CENTER;
-            lp.leftMargin = 0;
-            lp.topMargin = 0;
-            t.setTranslationX(gx);
-            t.setTranslationY(gy);
-        }
-        t.setLayoutParams(lp);
     }
 
     /**
@@ -874,15 +725,12 @@ final class PubHook {
         if (old != null) old.removeOnLayoutChangeListener(ANCHOR_LISTENER);
         anchorRef = new WeakReference<>(best);
         if (best != null) best.addOnLayoutChangeListener(ANCHOR_LISTENER);
-        lastGx = lastGy = Integer.MIN_VALUE; // 锚点变了，下一次 applyOffset 一定重放
     }
 
     /** setText 钩子里认出了当前视频的文案：直接当锚点（这时还没布局，布局好之后监听会重放位置）。 */
     private static void adoptAnchor(TextView t) {
         styleCaption(t);
         setAnchor(t);
-        TextView tv = viewRef.get();
-        if (tv != null && tv.getParent() != null) applyOffset(tv);
     }
 
     /** 视频文案的字色和黑边（只有这两项里有开着的才动；有变化才设，布局变化时反复调用也没有开销）。 */
@@ -907,58 +755,13 @@ final class PubHook {
         bindAnchor((ViewGroup) a.getWindow().getDecorView());
     }
 
-    private static void clearAnchor() {
-        View old = anchorRef.get();
-        if (old != null) old.removeOnLayoutChangeListener(ANCHOR_LISTENER);
-        anchorRef = new WeakReference<>(null);
-        lastGx = lastGy = Integer.MIN_VALUE;
-    }
-
-    /** 位置浮窗拖动时实时生效。 */
-    static void applyOffsetNow() {
-        TextView t = viewRef.get();
-        if (t != null) applyOffset(t);
-    }
-
-    private static void hideNow() {
-        TextView t = viewRef.get();
-        if (t != null) t.setVisibility(View.GONE);
-    }
-
     // ------------------------------------------------------------ 生命周期
 
-    private static void detach(View v) {
-        if (v != null && v.getParent() instanceof ViewGroup) ((ViewGroup) v.getParent()).removeView(v);
-    }
-
-    private static void removeView() {
-        detach(viewRef.get());
-    }
-
-    /** 位置浮窗关闭后：没开常显就把文字撤掉。 */
-    static void onPanelClosed() {
-        if (!DanmakuHook.cfg.pubAlways) removeView();
-    }
-
-    /** 回到前台（配置刚重读过）：需要时弹出位置浮窗；换了页面的文字拿掉重建；位置有变立即生效。 */
+    /** 回到前台（配置刚重读过）：给当前视频的文案设一次样式。 */
     static void onResume(Activity a) {
         try {
             if (!isMain()) return;
-            DanmakuConfig c = DanmakuHook.cfg;
-            if (c.pubAdjust && isHostActivity(a)) {
-                c.pubAdjust = false; // 一次性请求：先清掉并写回，免得下次回到前台又弹
-                DanmakuHook.saveCfg();
-                TimePanel.open(a, TimePanel.PUB);
-            }
             refreshCaption(a);
-            TextView t = viewRef.get();
-            if (t == null) return;
-            if (!enabled() || !isHostActivity(a) || t.getContext() != a) {
-                removeView();
-                return;
-            }
-            applySize(t);
-            applyOffset(t);
         } catch (Throwable ignored) {
         }
     }
