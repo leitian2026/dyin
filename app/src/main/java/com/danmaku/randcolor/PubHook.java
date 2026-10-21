@@ -533,20 +533,44 @@ final class PubHook {
     }
 
     /**
-     * 文案文字 a 是不是 desc（b）这个视频的文案。两步，都忽略空白、竖线、零宽字符，都不分配对象（在 setText 回调里调用）：
+     * 文案文字 a 是不是 desc（b）这个视频的文案。三步，都忽略空白、竖线、零宽字符，都不分配对象（在 setText 回调里调用）：
      * ①开头对齐：前 SAME_N 个有效字符相同（至少比了 4 个，或者一方整段比完且完全相同）；
-     * ②开头对不上时：desc 的前 SAME_N 个有效字符，出现在文案前 SCAN 个有效字符之内（desc 至少 MIN_IN 个有效字符）。
+     * ②文案开头是「第N集」之类的前缀：跳过它再按①比（desc 再短也行）；
+     * ③还是对不上：desc 的前 SAME_N 个有效字符，出现在文案前 SCAN 个有效字符之内（desc 至少 MIN_IN 个有效字符，兜底别的前缀）。
      *    依据：TextRec 40.7.0（textrec-tasks-20261021-150205）里系列剧的文案控件先设「小燕子成功见到皇上 #还珠格格」（和 desc 开头相同），
      *    再设「第11集 | 小燕子成功见到皇上 #还珠格格」（抖音在前面加了「第N集 | 」）；只比开头的话第二次就认不出，这一行会被撤掉。
      */
     private static final int SAME_N = 12, SCAN = 16, MIN_IN = 6;
 
     private static boolean sameStart(CharSequence a, String b) {
-        return sameHead(a, b) || containsHead(a, b);
+        if (sameHead(a, 0, b)) return true;
+        int p = seriesPrefixEnd(a);
+        if (p > 0 && sameHead(a, p, b)) return true; // 跳过「第N集」再比开头：短文案也能精确认出
+        return containsHead(a, b);
     }
 
-    private static boolean sameHead(CharSequence a, String b) {
-        int i = 0, j = 0, n = 0;
+    /** 文案开头是「第N集 / 话 / 期 / 章」（N 是数字或中文数字）：返回这个前缀结束的位置；不是返回 0。不分配对象。 */
+    private static int seriesPrefixEnd(CharSequence a) {
+        int la = a.length(), i = 0;
+        while (i < la && skip(a.charAt(i))) i++;
+        if (i >= la || a.charAt(i) != '\u7B2C') return 0; // 第
+        i++;
+        int n = 0;
+        while (i < la && n < 6 && isNum(a.charAt(i))) {
+            i++;
+            n++;
+        }
+        if (n == 0 || i >= la) return 0;
+        char c = a.charAt(i);
+        return c == '\u96C6' || c == '\u8BDD' || c == '\u671F' || c == '\u7AE0' ? i + 1 : 0; // 集 话 期 章
+    }
+
+    private static boolean isNum(char c) {
+        return Character.isDigit(c) || "\u4E00\u4E8C\u4E09\u56DB\u4E94\u516D\u4E03\u516B\u4E5D\u5341\u767E\u96F6\u3007\u4E24".indexOf(c) >= 0;
+    }
+
+    private static boolean sameHead(CharSequence a, int from, String b) {
+        int i = from, j = 0, n = 0;
         int la = a.length(), lb = b.length();
         while (n < SAME_N) {
             while (i < la && skip(a.charAt(i))) i++;
