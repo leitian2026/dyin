@@ -3,7 +3,7 @@
 ## 功能
 1. **弹幕随机色**：每条弹幕随机颜色，保留黑色描边。
 2. **拦截点赞**：右侧爱心按钮 / 双击视频不再点赞，也不出双击红心。
-3. **打开评论**：上面两种操作改为打开当前视频的评论。
+3. **打开评论**：上面两种操作改为打开当前视频的评论。双击这一路（1.20.0 起）优先走名字没混淆的 `onDoubleTap` + `MonitorScrollFrameLayout#onInterceptTouchEvent`，没挂上时由混淆名的 `LLLIILIL` 兜底。
 4. **视频时长常显**（1.15）：自己画一行 `00:12 / 03:45`，默认在屏幕正中，随播放走动；1.16 起抖音任何界面都显示，位置用抖音里的浮窗（两条滑动条）调整。
 
 5. **无操作自动退出**（1.17.8）：连续 N 分钟没有操作抖音（触摸、按键、回到前台都算操作），就结束抖音进程；后台也计时。设置页里填分钟数，0 = 关闭。
@@ -21,6 +21,19 @@
 ## 使用
 1. LSPosed 启用模块，作用域勾选抖音，强杀抖音重开。
 2. 打开模块设置，点「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
+
+## 1.20.0：双击改评论多一条名字没混淆的路径
+- **新增两个钩子**（`HookGuard` 编号 11 / 12，设置页「双击改评论：识别双击（系统方法）」「双击改评论：拦在点赞之前」，挂在 `CommentHook.tryHook` 里，它本来就在 `DanmakuHook.init` 和 `hookResume` 两处调用）：
+  - `dtap.seen`：`android.view.GestureDetector$SimpleOnGestureListener#onDoubleTap(MotionEvent)`（系统方法）；
+  - `dtap.cut`：`MonitorScrollFrameLayout#onInterceptTouchEvent(MotionEvent)`（`com.ss.android.ugc.aweme.feed.plato.business.contentconsumption.interestselection`，类名、方法名都没混淆）。
+- **依据**（TextRec，40.7.0，`textrec-tasks-20261020-203447` / `20261021-032906` / `20261021-093511`）：
+  ①双击是在 `MonitorScrollFrameLayout.onInterceptTouchEvent` 里被识别的：第二下 DOWN 时 `onDoubleTap` 的栈是 `onInterceptTouchEvent → ATListener.onTouch → FeedPinchPresenterV2 → LiveData → VideoPinchUtil$eventObserver$1 → GestureDetector.onTouchEvent → onDoubleTap`；监听器 `AdS2S0100000_29` 没重写 `onDoubleTap`（命中的是 `SimpleOnGestureListener` 自己的方法，返回 false）；`onDoubleTap` 在两次双击里各命中 1 次（首页和个人主页视频流都有），单击、上滑 0 次。
+  ②识别完 `onInterceptTouchEvent` 才返回，之后第二下 DOWN 才往下发给 `LongPressLayout`（红心和点赞在那里面）；「已点赞」界面更新在 `onDoubleTap` 之后约 42ms。
+  ③`VideoViewHolderRootView#onInterceptTouchEvent` 在第二下的 MOVE 上返回 true 是抖音自己的取消，发生在点赞之后，拦不住，所以没用它。
+- **做法**：`dtap.cut` 的钩子进来时记下「正在拦截判断」，`dtap.seen` 在这个期间被调到就记一笔；`onInterceptTouchEvent` 出来时如果记了，就把结果改成 `true`（子视图收不到第二下 DOWN，`LongPressLayout` 里的红心和点赞都不会发生），同时打开评论（找评论按钮的方法和 `LLLIILIL` 那条一样，800ms 内只开一次）。找不到评论按钮也照样拦：双击不点赞。开关还是 `dtapToComment`，在回调里判断。两个静态变量都只在主线程的触摸分发里读写；回调里没有反射、没有对象分配、没有日志。
+- **和 `LLLIILIL` 的关系**：新路径拦住了，第二下 DOWN 到不了 `LongPressLayout`，`comment.dtap` 那个混淆名钩子就不会被走到；新路径没挂上或没生效（抖音改了监听器、类名变了）时，仍由 `comment.dtap` 兜底。没有改任何已有钩子的匹配规则，`RULES_REV` 不变。
+- **降级**：两个钩子缺一个就什么都不做（`dtap.seen` 没挂上永远不会标记；`dtap.cut` 没挂上不会改结果），抖音原有行为不变。
+- **局限**：①没有在真机验证；②`LongPressLayout` 是 `MonitorScrollFrameLayout` 的后代（按栈上的 `X.07Ut.dispatchTouchEvent` 推断）、「这里返回 true 之后点赞确实不会发生」（按安卓的拦截规则推断）都没有记录证明；③第一下点击已经让视频暂停（描述变成「播放视频」），这一步拦不住，双击之后视频会不会保持暂停要看实际；④如果抖音以后在监听器里重写了 `onDoubleTap`，`dtap.seen` 就命中不了，新路径失效，由 `comment.dtap` 兜底；⑤这条路径靠 `onDoubleTap` 触发，抖音的双击判定（间隔、位置容差）就是系统 `GestureDetector` 的，不是模块自己算的。
 
 ## 1.19.1：文案控件认全，改色 / 位置不再慢
 - **问题**：1.18.3 / 1.19.0 只认 `ScrollMentionTextView` 一种文案控件。导出里（`150752` / `143514`）只有第一个视频（`bind this=HorizonPhotosViewHolder`）的文案在它上面（SETTEXT `ScrollMentionTextView#2131369754`）；其他视频的文案 SETTEXT 在 `com.ss.android.ugc.aweme.views.MentionTextView#2131401418`（「玉米，加州，等各种🐍宝宝」「找个帮忙喂鸡的」……）。所以普通视频上既找不到锚点（退回屏幕中心 + 偏移，容易压在文案上）也不会设样式。另外文案的 `setText` 发生在 `onPlaying` 之后（第一个视频：`onPlaying` 1379ms，文案 SETTEXT 1501ms），开始播放那一刻去找文案控件时它还是空的，要等下一次触发才变色。
