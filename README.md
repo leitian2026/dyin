@@ -22,6 +22,14 @@
 1. LSPosed 启用模块，作用域勾选抖音，强杀抖音重开。
 2. 打开模块设置，点「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
+## 1.20.3：双击打开评论后视频不再被暂停（dtap.click）
+- **问题**：双击打开评论后，视频停在暂停状态。
+- **依据**（TextRec，40.7.0，`textrec-tasks-20261021-105717`，开着双击改评论）：①单击是延迟处理的：单击暂停（touch 18413）→ `onPlayPause` 18674，隔 261ms；单击继续（touch 32279）→ 继续播放 32467，隔 188ms。继续播放那次的栈：`WeakHandler.handleMessage ← BaseListFragmentPanel.handleMsg ← X.06vk.run ← FeedComponentsRoot.handleSingleClick ← handleSingleClickInner ← handleVideoPauseAndPlay(Aweme)`，暂停 / 继续是同一个切换，`FeedComponentsRoot` 这几个方法 TextRec 都标 [稳定]。②双击（任务 4）：第一下 touch 46492，评论页 46671 打开，第二下 touch 46763，`onPlayPause` 46844，比第二下还晚，调用栈和单击暂停完全相同。
+- **推断**：抖音自己的双击处理会取消那条延迟的单击；dyin 拦掉了双击，取消没发生，单击在双击之后照常执行，把视频切成暂停。（任务 4 的记录里没有直接出现 `handleSingleClick` 的栈，这是按时间推的。）
+- **新增钩子**：`dtap.click`（`HookGuard` 编号 14，设置页「双击改评论：不让单击暂停视频」，挂在 `CommentHook.tryHook` 里）：`com.ss.android.ugc.aweme.feed.plato.core.FeedComponentsRoot#handleSingleClick`（所有返回 void 的重载，类名方法名都没混淆）。`dtap.cut` / `comment.dtap` 拦住双击时记下时刻；之后 800ms 内 `handleSingleClick` 被调到就直接跳过，视频不暂停。不改已有钩子的匹配规则，`RULES_REV` 不变。回调里只有一次静态读和一次时间比较，整体 `try/catch Throwable`。
+- **降级**：`dtap.click` 没挂上时什么都不做，行为和 1.20.2 一样（双击后暂停）。`dtapToComment` 关掉时也不生效。
+- **局限**：①没有编译、没有上机；②如果单击处理比第二下点击还早执行（双击两下间隔很长），暂停在拦住双击之前已经发生，这个钩子管不了；③800ms 内的真正单击也会被跳过（双击刚结束就马上单击，几乎不会发生）；④推断没有被直接证实，如果装上后仍然暂停，需要再记一次 `FeedComponentsRoot#handleSingleClick*` 在双击里有没有被调到。
+
 ## 1.20.2：视频文案改色多一条「绘制时改色」的路径（cap.draw）
 - **新增钩子**：`cap.draw`（`HookGuard` 编号 13，设置页「视频文案：绘制时改色」，挂在 `PubHook.tryHook` → `tryDraw` 里，它本来就在 `DanmakuHook.init` 和 `hookResume` 两处调用）：`com.ss.android.ugc.aweme.views.MentionTextView#onDraw(Canvas)`（类名、方法名都没混淆）。
 - **依据**（TextRec，40.7.0，`textrec-tasks-20261021-103536` 的 #1）：文案控件是 `ScrollMentionTextView`（id=`desc`）；绘制栈是 `DmtTextView.onDraw`（栈第 1 层）← `MentionTextView.onDraw`（栈第 2 层，TextRec 标 [稳定]）。`MentionTextView` 里声明了 `onDraw`，`ScrollMentionTextView` 和 `MentionTextView` 的实例都经过它。画笔颜色 `0xE6FFFFFF`，同一条记录里「文字颜色(最近一次被设置)」也是 `0xE6FFFFFF`。
