@@ -54,6 +54,25 @@ final class CommentHook {
      */
     private static final String MONITOR = "com.ss.android.ugc.aweme.feed.plato.business.contentconsumption.interestselection.MonitorScrollFrameLayout";
     private static final String GESTURE_LISTENER = "android.view.GestureDetector$SimpleOnGestureListener";
+    /**
+     * 双击之后视频被暂停（TextRec，40.7.0，textrec-tasks-20261021-105717，开着 dyin 的双击改评论）：
+     *  - 单击是「延迟处理」的：任务 2 单击（touch 18413）→ onPlayPause 在 18674，隔 261ms；任务 3 单击（touch 32279）→ 继续播放在 32467，隔 188ms。
+     *    继续播放那次的调用栈是 Handler.dispatchMessage ← WeakHandler.handleMessage ← BaseListFragmentPanel.handleMsg ← X.06vk.run
+     *    ← FeedComponentsRoot.handleSingleClick ← handleSingleClickInner ← handleVideoPauseAndPlay(Aweme) ← … ← OnUIPlayListenerDelegate（暂停 / 继续是同一个切换）。
+     *    这四个 FeedComponentsRoot 方法 TextRec 都标 [稳定]（类名方法名没混淆）。
+     *  - 任务 4 双击：第一下 touch 46492，评论页 46671 打开，第二下 touch 46763，onPlayPause 在 46844——比第二下还晚，调用栈和单击暂停那条
+     *    完全相同（X.0FaC.run ← X.0FWv.run ← Handler.handleCallback）。时间上正好是「第一下点击的延迟单击处理」在双击之后才执行。
+     *    推断：抖音自己的双击处理会取消这条延迟的单击，dyin 拦掉了双击，取消没发生，单击照常执行，把视频切成暂停。
+     * 没有直接证据的部分：任务 4 的记录里没有出现 handleSingleClick 的栈（栈被合并成「与 #2 相同」），「单击处理是被延迟执行的」是按时间推的。
+     * 做法：拦住双击时记下时刻，之后一小段时间内 handleSingleClick 被调到就跳过（不暂停）。
+     */
+    private static final String FEED_ROOT = "com.ss.android.ugc.aweme.feed.plato.core.FeedComponentsRoot";
+    private static final String CLICK_METHOD = "handleSingleClick";
+    /** 拦住双击之后多久内，把单击处理跳过（单击处理比第一下点击晚 190~350ms，留够余量，又不影响之后真正的单击）。 */
+    private static final long CLICK_SKIP_MS = 800;
+    private static volatile long dtapAt;
+    private static final XC_MethodHook CLICK_HOOK = new ClickHook();
+
     /** 同一次双击只打开一次评论。 */
     private static final long REOPEN_GAP_MS = 800;
 
@@ -78,10 +97,22 @@ final class CommentHook {
                 "SimpleOnGestureListener 里没有 onDoubleTap(MotionEvent)（系统类，一般不会出现）", cl);
         HookGuard.hook(HookGuard.DTAP_CUT, MONITOR, motion("onInterceptTouchEvent"), CUT_HOOK,
                 "MonitorScrollFrameLayout 里没有 onInterceptTouchEvent(MotionEvent)（抖音改了这个类，需要用 TextRec 重新追踪双击时的触摸分发）", cl);
+        HookGuard.hook(HookGuard.DTAP_CLICK, FEED_ROOT, voidNamed(CLICK_METHOD), CLICK_HOOK,
+                "FeedComponentsRoot 里没有 void handleSingleClick（抖音改了单击处理，需要用 TextRec 重新追踪单击暂停的调用栈）", cl);
         HookGuard.hook(HookGuard.DTAP, PANEL, motion(PANEL_DTAP_METHOD), DTAP_HOOK,
                 PANEL_DTAP_METHOD + "(MotionEvent) 在 BaseListFragmentPanel 里没有找到（方法名是混淆的，抖音更新后会变，需要重新追踪）", cl);
         HookGuard.hook(HookGuard.DIGG, DIGG, HookGuard.named(DIGG_CLICK_METHOD), DIGG_HOOK,
                 DIGG_CLICK_METHOD + " 在 FeedDiggPresenter 里没有找到（方法名是混淆的，抖音更新后会变，需要重新追踪）", cl);
+    }
+
+    /** 名字匹配、返回 void 的所有重载（handleSingleClick() / handleSingleClick(Float, Float) 都挂，跳过时返回 null 即可）。 */
+    private static HookGuard.Filter voidNamed(final String name) {
+        return new HookGuard.Filter() {
+            @Override
+            public boolean ok(Method m) {
+                return m.getName().equals(name) && m.getReturnType() == void.class;
+            }
+        };
     }
 
     /** 只挂参数是单个 MotionEvent、名字匹配的重载。 */
@@ -103,6 +134,7 @@ final class CommentHook {
             try {
                 if (!DanmakuHook.cfg.dtapToComment) return;
                 long now = SystemClock.uptimeMillis();
+                dtapAt = now;
                 if (now - lastOpenAt >= REOPEN_GAP_MS) {
                     lastOpenAt = now;
                     openComments();
@@ -149,11 +181,25 @@ final class CommentHook {
                 dtapSeen = false;
                 if (p.hasThrowable()) return;
                 long now = SystemClock.uptimeMillis();
+                dtapAt = now;
                 if (now - lastOpenAt >= REOPEN_GAP_MS) {
                     lastOpenAt = now;
                     openComments();
                 }
                 p.setResult(Boolean.TRUE);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** 拦住双击之后的一小段时间里，抖音延迟执行的「单击处理」（切换暂停 / 播放）直接跳过。热路径：一次静态读、一次时间比较，不分配。 */
+    private static final class ClickHook extends XC_MethodHook {
+        @Override
+        protected void beforeHookedMethod(MethodHookParam p) {
+            try {
+                if (!DanmakuHook.cfg.dtapToComment) return;
+                long t = dtapAt;
+                if (t != 0 && SystemClock.uptimeMillis() - t < CLICK_SKIP_MS) p.setResult(null);
             } catch (Throwable ignored) {
             }
         }
