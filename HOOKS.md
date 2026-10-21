@@ -45,7 +45,7 @@ LSPosed 日志里会出现两种关键行（只在状态变成「放弃」「不
 | `HookGuard.java` | 钩子编号 / id 清单、状态、停止条件、落盘、`find` / `hook` / `ok` / `miss` / `waitFail` |
 | `DanmakuHook.java` | 入口 `init(lp)`、`hookResume()`（每次回到前台的重试入口）、弹幕 `paint` 钩子（分档匹配示例） |
 | `TimeHook.java` | 时长：4 个钩子（进度 / 停止 / 释放 / 开始播放），单方法按名字匹配的示例 |
-| `CommentHook.java` | 点赞改评论：2 个钩子（混淆名，不放宽匹配的示例） |
+| `CommentHook.java` | 点赞改评论：4 个钩子——2 个混淆名（不放宽匹配的示例）+ 2 个没混淆的双击路径（`dtap.seen` 系统方法、`dtap.cut` 在拦截判断里改结果，两个都挂上才生效） |
 | `MainActivity.java` | 设置页；`HOOK_NAMES` 是「钩子 id → 中文名」，`describeHooks` 解析 `hooks.properties` |
 | `PubHook.java` | 发布日期地点常显：钩 `DmtTextView#setText(CharSequence, BufferType)`（通用控件，回调里先看开关、再比较 `this` 的类）；播放器的换视频 / 离开事件由 `TimeHook` 转进来 |
 | `TabHook.java` | 首页顶部标签隐藏：类名按没混淆的 `HomeTopTabItemViewNew` 找（走 HookGuard），挂框架方法 `View.setContentDescription` 并按这个类过滤 |
