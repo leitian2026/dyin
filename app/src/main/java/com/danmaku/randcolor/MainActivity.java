@@ -169,10 +169,10 @@ public class MainActivity extends Activity {
         root.addView(section("发布日期和地点常显"));
         LinearLayout pb = card();
         swPub = new Switch(this);
-        pb.addView(switchRow("发布日期和地点一直显示", "在视频文案下面自己画一行「2026-10-19 11:50:00 广西 南宁」，取自视频本身的发布时间（精确到秒）和 IP 属地（省，有城市就加市），不用点「展开」；划到下一个视频就换；没有地点的视频只显示时间", swPub));
+        pb.addView(switchRow("发布日期和地点一直显示", "作为视频文案的最后一行显示「2026-10-19 11:50:00 广西 南宁」，跟文案连在一起、在文案正下方；取自视频本身的发布时间（精确到秒）和 IP 属地（省，有城市就加市），不用点「展开」；没有地点的视频只显示时间", swPub));
         pb.addView(divider());
         pb.addView(tv("位置微调", 17, cText, true));
-        TextView pdsc = tv("和时长位置一样：点下面的按钮，会在抖音里弹出同样的浮窗，调的是这一行的位置和字号（位置是相对视频文案左下角的偏移）。点浮窗里的「完成」自动保存，回到本页会同步数值。需要 root。", 13, cSub, false);
+        TextView pdsc = tv("1.20.4 起这一行直接并进文案文字里，位置和字号跟着文案走，下面的位置微调对它不再起作用（浮窗里只剩一个示例）。", 13, cSub, false);
         pdsc.setPadding(0, dp(2), 0, dp(12));
         pb.addView(pdsc);
         tvPubOffset = tv("", 14, cSub, false);
