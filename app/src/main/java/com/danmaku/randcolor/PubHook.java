@@ -5,6 +5,9 @@ import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.RelativeSizeSpan;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -85,6 +88,19 @@ import de.robv.android.xposed.XposedBridge;
  *    抖音之后怎么重设字色都不影响。话题 / @ 这类 span 自己带颜色，仍保持抖音原来的颜色。
  *  - 只改「认出是视频文案」的控件：styleCaption 认出时给控件打一个 tag，onDraw 回调里只看 tag（评论等其他 MentionTextView 不动）。
  *  - mCurTextColor 在安装阶段按名字找好并缓存（TextView 是系统类，字段名不会被抖音混淆）；读不到就 miss，改色退回 setText 那条路。
+ *
+ * 发布信息并进文案（1.20.4，取代下面「自己画一行 + 窗口坐标」的做法）：
+ *  - 问题（用户截图）：浮层是 decor 里的独立 TextView，位置靠文案的窗口坐标算。文案控件认不出时退到屏幕正中（截图 1：压在视频人脸上），
+ *    认出了也会因为文案的高度 / 祖先位置变化没跟上而压在文案第二行上（截图 2）。坐标是在文案外面算的，只要文案动了就可能对不上。
+ *  - 做法：不再算坐标。文案控件（MentionTextView / ScrollMentionTextView，依据同上）每次 setText，在 DmtTextView#setText 的 before 回调里
+ *    把参数换成「原文案 + 换行 + 日期地点」，信息是文案自己的最后一行，位置、展开 / 收起、跟着页面滑动都由抖音的布局负责。
+ *  - 这条 setText 的设置栈（TextRec，textrec-tasks-20261021-103536 的 #1）：DmtTextView.setText ← ScrollMentionTextView.setText ← TextView.setText
+ *    ← lambda ← Handler（异步投递，不在 bind 里同步调用），所以不能靠「bind 期间」认视频，只能按文案文字认：文字开头和某个视频的 Aweme.desc 相同。
+ *    比较时忽略空白和竖线（截图 1 的文案「第42集 | 敦亲王…」带空格和竖线，只比前 16 个字符会对不上），只比前 12 个有效字符。
+ *  - 抖音点「展开」时自己会在文案末尾加「日期 地点」（见上面 pub.text 的依据，tail() 认得出），这时不再重复追加。
+ *  - 没有证据的部分：①文案控件有没有 maxLines 限制（有的话收起状态下多出来的这一行可能被截掉）；②图中「抖音精选内容」那种视频的文案
+ *    是不是同样的两个类；③第一个视频如果在 pub.bind 挂上之前就设好了文案，要等下一次 setText（划走再划回、展开 / 收起）才会带上这一行。
+ *  - 字号：用 RelativeSizeSpan(0.9)，跟着文案走；位置浮窗里的位置和字号不再对这行起作用（浮窗只留着一个示例）。
  *
  * 没有定时器 / 轮询：文字只在上面的回调里更新或隐藏。
  */
@@ -406,6 +422,28 @@ final class PubHook {
     // ------------------------------------------------------------ 钩子
 
     private static final class Hook extends XC_MethodHook {
+        /** 文案控件设文字之前：把「日期 地点」作为最后一行并进去（只有认出是某个视频的文案才动；回调里只有这一次分配）。 */
+        @Override
+        protected void beforeHookedMethod(MethodHookParam p) {
+            try {
+                if (!DanmakuHook.cfg.pubAlways) return;
+                Object self = p.thisObject;
+                if (self == null || p.args == null || p.args.length == 0 || !(p.args[0] instanceof CharSequence)) return;
+                Class<?> sk = self.getClass();
+                if (sk != capMention && sk != captionCls) return;
+                CharSequence cs = (CharSequence) p.args[0];
+                if (cs.length() == 0 || tail(cs) != null) return; // 空文字 / 抖音自己已经带了日期地点（展开）
+                String line = lineFor(cs);
+                if (line == null || endsWith(cs, line)) return;
+                SpannableStringBuilder b = new SpannableStringBuilder(cs);
+                int st = b.length() + 1;
+                b.append('\n').append(line);
+                b.setSpan(new RelativeSizeSpan(0.9f), st, b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                p.args[0] = b;
+            } catch (Throwable ignored) {
+            }
+        }
+
         @Override
         protected void afterHookedMethod(MethodHookParam p) {
             try {
@@ -436,6 +474,49 @@ final class PubHook {
             } catch (Throwable ignored) {
             }
         }
+    }
+
+    /** 这段文案是哪个视频的：开头和某个视频的 desc 相同（忽略空白和竖线），返回那个视频的「日期 地点」；认不出返回 null。 */
+    private static String lineFor(CharSequence cs) {
+        Info hit = null;
+        synchronized (INFO) {
+            for (Info i : INFO.values()) {
+                if (i.desc != null && sameStart(cs, i.desc)) {
+                    hit = i;
+                    break;
+                }
+            }
+        }
+        return hit == null ? null : format(hit);
+    }
+
+    /** 忽略空白、竖线、零宽字符，两边前 SAME_N 个有效字符都相同（至少比了 4 个，或者一方整段比完且完全相同）。 */
+    private static final int SAME_N = 12;
+
+    private static boolean sameStart(CharSequence a, String b) {
+        int i = 0, j = 0, n = 0;
+        int la = a.length(), lb = b.length();
+        while (n < SAME_N) {
+            while (i < la && skip(a.charAt(i))) i++;
+            while (j < lb && skip(b.charAt(j))) j++;
+            if (i >= la || j >= lb) return n > 0 && i >= la && j >= lb || n >= 4;
+            if (a.charAt(i) != b.charAt(j)) return false;
+            i++;
+            j++;
+            n++;
+        }
+        return true;
+    }
+
+    private static boolean skip(char c) {
+        return Character.isWhitespace(c) || c == '|' || c == '\uFF5C' || c == '\u4E28' || c == '\u200B' || c == '\u00A0';
+    }
+
+    private static boolean endsWith(CharSequence cs, String s) {
+        int n = cs.length(), m = s.length();
+        if (n < m) return false;
+        for (int k = 0; k < m; k++) if (cs.charAt(n - m + k) != s.charAt(k)) return false;
+        return true;
     }
 
     /**
@@ -617,15 +698,8 @@ final class PubHook {
             r = INFO.get(id);
         }
         curDesc = r == null ? null : r.desc;
-        boolean shown = false;
-        if (!TimePanel.isOpen()) {
-            hideNow();
-            if (r != null && enabled()) {
-                showInfo(r); // show() 里已经找过文案控件并设过样式
-                shown = true;
-            }
-        }
-        if (!shown) refreshCaption(CommentHook.top.get());
+        if (!TimePanel.isOpen()) hideNow(); // 发布信息已经并进文案文字里（见文件头），不再单独画浮层
+        refreshCaption(CommentHook.top.get());
     }
 
     /** 离开这个视频（划走 / 播放器释放）：别的视频迟到的事件不动当前文字。 */
@@ -649,6 +723,8 @@ final class PubHook {
 
     private static void show(Activity a, String text) {
         if (!isHostActivity(a)) return;
+        // 发布信息并进文案文字里了：这个浮层只在位置浮窗打开时画一个示例
+        if (!(TimePanel.isOpen() && TimePanel.target() == TimePanel.PUB)) return;
         TextView t = viewRef.get();
         ViewGroup decor = (ViewGroup) a.getWindow().getDecorView();
         float d = a.getResources().getDisplayMetrics().density;
