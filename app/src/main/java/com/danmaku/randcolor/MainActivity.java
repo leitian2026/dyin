@@ -2,9 +2,12 @@ package com.danmaku.randcolor;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
+import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -21,6 +24,7 @@ import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
 
@@ -51,6 +55,15 @@ public class MainActivity extends Activity {
     private LinearLayout blockList;
     private TextView tvPubPreview;
     private Switch swCapOutline;
+    /** 直播间开播时间：开关、取哪个时间、模板、字号、颜色、位置（百分比）和位置预览。 */
+    private Switch swLive;
+    private LinearLayout segLiveSrc;
+    private EditText etLiveFmt;
+    private SizeField liveSizeF;
+    private ColorField liveColorF;
+    private SeekBar sbLiveX, sbLiveY;
+    private TextView tvLiveX, tvLiveY, tvLiveFmtPreview;
+    private PosPreview livePreview;
     private TextView tvStatus, btnPush, btnHooks;
     private ScrollView scroll;
 
@@ -211,6 +224,80 @@ public class MainActivity extends Activity {
         pb.addView(pubColorF.build());
         root.addView(pb, cardLp());
 
+        // ---- 直播间开播时间
+        root.addView(section("直播间开播时间"));
+        LinearLayout lv = card();
+        swLive = new Switch(this);
+        lv.addView(switchRow("直播间里显示开播时间", "进直播间时在画面上叠一行开播时间；只在直播间里显示，其他界面（推荐、关注、同城……）都不显示。点「保存并应用」后，抖音回到前台、重新进直播间生效", swLive));
+        lv.addView(divider());
+        lv.addView(tv("显示哪个时间", 17, cText, true));
+        TextView lsd = tv("「开播时间」是直播间数据里的 startTime（没有就用创建时间）；「房间创建时间」是 createTime，通常比开播早几秒。哪个更准要在你的直播间里对一下。", 13, cSub, false);
+        lsd.setPadding(0, dp(2), 0, dp(10));
+        lv.addView(lsd);
+        segLiveSrc = segmented("开播时间", "房间创建时间");
+        lv.addView(segLiveSrc);
+        lv.addView(divider());
+        lv.addView(tv("显示格式", 17, cText, true));
+        TextView lfd = tv("可用：{日期} 如 2026-10-22，{时间} 如 07:22:36，{月日} 如 10-22；其他文字原样显示，两个字符 \\n 表示换行。", 13, cSub, false);
+        lfd.setPadding(0, dp(2), 0, dp(10));
+        lv.addView(lfd);
+        etLiveFmt = field();
+        etLiveFmt.setHint(LiveFormat.DEFAULT);
+        etLiveFmt.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence cs, int a, int b2, int c2) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence cs, int a, int b2, int c2) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable e) {
+                updateLivePreview();
+            }
+        });
+        lv.addView(etLiveFmt);
+        tvLiveFmtPreview = tv("", 14, cText, false);
+        tvLiveFmtPreview.setPadding(dp(4), dp(10), 0, 0);
+        lv.addView(tvLiveFmtPreview);
+        lv.addView(divider());
+        lv.addView(tv("字号", 17, cText, true));
+        TextView lzd = tv("8～40 sp，默认 14。", 13, cSub, false);
+        lzd.setPadding(0, dp(2), 0, dp(12));
+        lv.addView(lzd);
+        liveSizeF = new SizeField(14);
+        liveSizeF.changed = this::updateLivePreview;
+        lv.addView(liveSizeF.build());
+        lv.addView(divider());
+        lv.addView(tv("颜色", 17, cText, true));
+        TextView lcd = tv("点「选色」挑一个颜色；文字自带一圈黑边，亮背景上也看得清。", 13, cSub, false);
+        lcd.setPadding(0, dp(2), 0, dp(12));
+        lv.addView(lcd);
+        liveColorF = new ColorField("默认（白色）", "选择开播时间颜色");
+        liveColorF.changed = this::updateLivePreview;
+        lv.addView(liveColorF.build());
+        lv.addView(divider());
+        lv.addView(tv("位置", 17, cText, true));
+        TextView lpd = tv("拖两个滑块，下面的小屏幕里实时看文字放在哪。0% = 最左 / 最上，100% = 最右 / 最下，文字始终完整显示在直播页面里，所以直播间里的任何位置都放得到。", 13, cSub, false);
+        lpd.setPadding(0, dp(2), 0, dp(8));
+        lv.addView(lpd);
+        tvLiveX = tv("", 15, cText, false);
+        lv.addView(tvLiveX);
+        sbLiveX = posBar();
+        lv.addView(sbLiveX, new LinearLayout.LayoutParams(-1, -2));
+        tvLiveY = tv("", 15, cText, false);
+        tvLiveY.setPadding(0, dp(8), 0, 0);
+        lv.addView(tvLiveY);
+        sbLiveY = posBar();
+        lv.addView(sbLiveY, new LinearLayout.LayoutParams(-1, -2));
+        livePreview = new PosPreview(this);
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(160), dp(320));
+        plp.gravity = Gravity.CENTER_HORIZONTAL;
+        plp.topMargin = dp(12);
+        lv.addView(livePreview, plp);
+        root.addView(lv, cardLp());
+
         // ---- 视频文案样式
         root.addView(section("视频文案样式"));
         LinearLayout cp = card();
@@ -316,6 +403,14 @@ public class MainActivity extends Activity {
         swCapOutline.setChecked(c.capOutline);
         capColorF.set(c.capColor);
         setSeg(segMode, c.mode == 1 ? 1 : 0);
+        swLive.setChecked(c.liveTime);
+        setSeg(segLiveSrc, c.liveSrc == 1 ? 1 : 0);
+        etLiveFmt.setText(c.liveFormat);
+        liveSizeF.set(c.liveSize);
+        liveColorF.set(c.liveColor);
+        sbLiveX.setProgress(c.liveX);
+        sbLiveY.setProgress(c.liveY);
+        updateLivePreview();
     }
 
     private DanmakuConfig read() {
@@ -333,6 +428,14 @@ public class MainActivity extends Activity {
         c.pubColor = pubColorF.color;
         c.capOutline = swCapOutline.isChecked();
         c.capColor = capColorF.color;
+        c.liveTime = swLive.isChecked();
+        c.liveSrc = segIndex(segLiveSrc) == 1 ? 1 : 0;
+        String lft = etLiveFmt.getText().toString();
+        c.liveFormat = lft.trim().isEmpty() ? LiveFormat.DEFAULT : lft;
+        c.liveSize = liveSizeF.v;
+        c.liveColor = liveColorF.color;
+        c.liveX = sbLiveX.getProgress();
+        c.liveY = sbLiveY.getProgress();
         java.util.ArrayList<String> hid = new java.util.ArrayList<>();
         for (int i = 0; i < TAB_LABELS.length; i++) if (cbTabs[i].isChecked()) hid.add(TAB_LABELS[i]);
         c.hiddenTabs = hid.toArray(new String[0]);
@@ -395,6 +498,8 @@ public class MainActivity extends Activity {
             {"pub.anchor", "视频文案：描边 / 改色"},
             {"pub.row", "发布日期地点 / 视频时长：所在容器"},
             {"cap.draw", "视频文案：绘制时改色"},
+            {"live.page", "直播间开播时间：直播间页面"},
+            {"live.room", "直播间开播时间：房间数据"},
     };
 
     /** 用 root 读抖音数据目录里的 hooks.properties（抖音进程自己写的），列出每个钩子的状态。 */
@@ -450,6 +555,91 @@ public class MainActivity extends Activity {
         return b.toString().trim();
     }
 
+    // ------------------------------------------------------------ 直播间开播时间：位置滑块 + 预览
+
+    /** 0～100 的位置滑块；拖动时刷新两行文字和预览。 */
+    private SeekBar posBar() {
+        SeekBar sb = new SeekBar(this);
+        sb.setMax(100);
+        sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                updateLivePreview();
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar bar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar bar) {
+            }
+        });
+        return sb;
+    }
+
+    /** 模板预览文字 + 位置文字 + 小屏幕预览一起刷新（控件还没建好时什么都不做）。 */
+    private void updateLivePreview() {
+        if (etLiveFmt == null || sbLiveX == null || sbLiveY == null || liveSizeF == null || liveColorF == null
+                || livePreview == null || tvLiveX == null || tvLiveY == null || tvLiveFmtPreview == null) return;
+        String text = LiveFormat.render(etLiveFmt.getText().toString(), PREVIEW_SEC);
+        tvLiveFmtPreview.setText(text == null ? "（没有内容）" : "预览：" + text);
+        tvLiveX.setText("水平位置 " + sbLiveX.getProgress() + "%");
+        tvLiveY.setText("垂直位置 " + sbLiveY.getProgress() + "%");
+        livePreview.update(text == null ? "" : text, sbLiveX.getProgress(), sbLiveY.getProgress(), liveSizeF.v, liveColorF.color);
+    }
+
+    /** 一块缩小的手机屏幕（深色底，像直播画面），文字按和抖音里同一个公式放：左 = (宽 − 文字宽) × x%，上 = (高 − 文字高) × y%。 */
+    private final class PosPreview extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private String text = "";
+        private int px = 3, py = 10, size = 14, color = 0;
+
+        PosPreview(Context c) {
+            super(c);
+        }
+
+        void update(String text, int x, int y, int size, int color) {
+            this.text = text;
+            px = x;
+            py = y;
+            this.size = size;
+            this.color = color;
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas cv) {
+            int w = getWidth(), h = getHeight();
+            if (w <= 0 || h <= 0) return;
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0xFF1B1D24);
+            cv.drawRoundRect(0, 0, w, h, dp(14), dp(14), paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(1));
+            paint.setColor(cStroke);
+            cv.drawRoundRect(0, 0, w, h, dp(14), dp(14), paint);
+            if (text.isEmpty()) return;
+            // 小屏幕相当于 360dp 宽的手机：字号按宽度比例缩小
+            float textPx = size * w / 360f;
+            paint.setStyle(Paint.Style.FILL);
+            paint.setTextSize(textPx);
+            paint.setColor(color != 0 ? color : 0xFFFFFFFF);
+            paint.setShadowLayer(Math.max(1f, textPx * 0.2f), 0f, 0f, 0xFF000000);
+            String[] lines = text.split("\n", -1);
+            float lh = paint.getFontMetrics().descent - paint.getFontMetrics().ascent;
+            float tw = 0f;
+            for (String ln : lines) tw = Math.max(tw, paint.measureText(ln));
+            float th = lh * lines.length;
+            float left = Math.max(0f, (w - tw) * px / 100f);
+            float top = Math.max(0f, (h - th) * py / 100f);
+            for (int i = 0; i < lines.length; i++) {
+                cv.drawText(lines[i], left, top + lh * i - paint.getFontMetrics().ascent, paint);
+            }
+            paint.clearShadowLayer();
+        }
+    }
+
     // ------------------------------------------------------------ 字号 / 颜色（时长、发布信息、文案共用）
 
     /** 色表：6 列 × 4 行，名字 + 不透明 RGB。 */
@@ -478,6 +668,8 @@ public class MainActivity extends Activity {
     private final class SizeField {
         int v;
         TextView label;
+        /** 值变了要做的事（比如刷新预览）；可以不设。 */
+        Runnable changed;
 
         SizeField(int def) {
             v = def;
@@ -505,6 +697,7 @@ public class MainActivity extends Activity {
         void set(int n) {
             v = Math.max(DanmakuConfig.SIZE_MIN, Math.min(DanmakuConfig.SIZE_MAX, n));
             show();
+            if (changed != null) changed.run();
         }
 
         void show() {
@@ -515,6 +708,7 @@ public class MainActivity extends Activity {
     /** 颜色行：色块 + 当前颜色名 + 「选色」按钮。color = 0 表示默认。 */
     private final class ColorField {
         int color;
+        Runnable changed; // 颜色变了要做的事（比如刷新预览）；可以不设
         final String defName, dialogTitle;
         View swatch;
         TextView label;
@@ -544,6 +738,7 @@ public class MainActivity extends Activity {
         void set(int c) {
             color = c;
             show();
+            if (changed != null) changed.run();
         }
 
         void show() {
