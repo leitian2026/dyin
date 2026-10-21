@@ -210,6 +210,20 @@ final class PubHook {
         tryAnchor(cl, ctx);
     }
 
+    /**
+     * pub.text：挂 DmtTextView 里 setText(CharSequence, TextView$BufferType)（类名、方法名都没混淆，TextRec 40.7.0，见文件头的依据）。
+     * 回调里要按引用比较 this 的类是不是 MentionTextView，所以 MentionTextView 类也要找到：找不到算「类没找到」（waitFail，不放弃）；
+     * DmtTextView 在、但没有这个签名的 setText 才算「方法没匹配」（miss）。
+     */
+    private static void tryText(ClassLoader cl, ClassLoader ctx) {
+        if (HookGuard.settled(HookGuard.PUB)) return;
+        Class<?> m = HookGuard.find(HookGuard.PUB, MENTION, cl, ctx);
+        if (m == null) return;
+        mentionCls = m;
+        HookGuard.hook(HookGuard.PUB, DMT, SET_TEXT, HOOK,
+                "DmtTextView 里没有 setText(CharSequence, BufferType)（文案控件的设置方法变了，需要重新追踪）", cl, ctx);
+    }
+
     /** pub.anchor：只找视频文案控件的两个类（ScrollMentionTextView 和 MentionTextView），不挂钩；找不到就一直用屏幕中心的位置、不改样式。 */
     private static void tryAnchor(ClassLoader cl, ClassLoader ctx) {
         if (HookGuard.settled(HookGuard.PUB_ANCHOR)) return;
