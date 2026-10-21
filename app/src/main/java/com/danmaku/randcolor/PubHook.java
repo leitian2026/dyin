@@ -75,6 +75,17 @@ import de.robv.android.xposed.XposedBridge;
  *    把阴影层设成「半径 3dp、偏移 0、黑色」（= 一圈黑边，和时长 / 发布信息文字的描边感一样）。有变化才设；
  *    话题、@ 这类带 span 的文字保持抖音自己的颜色。关掉功能后不会恢复原样（不知道抖音原来的值），要重启抖音。
  *
+ * 文案改色的第二条路（钩子 cap.draw，不碰文案内容，只在「画」的时候改色）：
+ *  - 依据（TextRec，抖音 40.7.0，textrec-tasks-20261021-103536 的 #1）：文案控件是 ScrollMentionTextView（id=desc）；绘制栈
+ *    DmtTextView.onDraw（栈第 1 层）← MentionTextView.onDraw（栈第 2 层，TextRec 标 [稳定]，类名方法名都没混淆）← View.draw，
+ *    所以 MentionTextView 里声明了 onDraw(Canvas)，ScrollMentionTextView 和 MentionTextView 的实例都会经过它。
+ *    画笔颜色记录：Paint(color=0xE6FFFFFF FILL)，同一次记录里「文字颜色(最近一次被设置)」也是 0xE6FFFFFF。
+ *  - TextView.onDraw 每次开头都用内部字段 mCurTextColor 给画笔上色，所以只改画笔没用；只在 onDraw 前把 mCurTextColor 临时换成 capColor、
+ *    onDraw 后换回去。不调 setTextColor（它会 invalidate，在 onDraw 里调会逼着每帧重画），文案内容不动，
+ *    抖音之后怎么重设字色都不影响。话题 / @ 这类 span 自己带颜色，仍保持抖音原来的颜色。
+ *  - 只改「认出是视频文案」的控件：styleCaption 认出时给控件打一个 tag，onDraw 回调里只看 tag（评论等其他 MentionTextView 不动）。
+ *  - mCurTextColor 在安装阶段按名字找好并缓存（TextView 是系统类，字段名不会被抖音混淆）；读不到就 miss，改色退回 setText 那条路。
+ *
  * 没有定时器 / 轮询：文字只在上面的回调里更新或隐藏。
  */
 final class PubHook {
@@ -144,6 +155,21 @@ final class PubHook {
     private static volatile Class<?> mentionCls;
     private static final XC_MethodHook BIND_HOOK = new BindHook();
 
+    // cap.draw：onDraw 前后临时换 mCurTextColor（都在主线程的绘制里用，不重入）
+    private static final int CAP_TAG = 0x7e0b0c01; // 应用自己的 tag key（高字节不小于 2）
+    private static final XC_MethodHook DRAW_HOOK = new DrawHook();
+    private static volatile Field fCurColor;
+    private static boolean drawSwapped;
+    private static int drawSaved;
+    private static final HookGuard.Filter ON_DRAW = new HookGuard.Filter() {
+        @Override
+        public boolean ok(Method m) {
+            if (!m.getName().equals("onDraw")) return false;
+            Class<?>[] t = m.getParameterTypes();
+            return t.length == 1 && t[0] == android.graphics.Canvas.class;
+        }
+    };
+
     /** 安装阶段找好的 Aweme 字段（回调里只取值）。ip 可以没有。 */
     private static volatile Field fAid, fTime, fIp, fCity, fDesc;
 
@@ -208,6 +234,60 @@ final class PubHook {
         tryText(cl, ctx);
         tryBind(cl, ctx);
         tryAnchor(cl, ctx);
+        tryDraw(cl, ctx);
+    }
+
+    /**
+     * cap.draw：挂 MentionTextView 里的 onDraw(Canvas)（见文件头的依据）。TextView.mCurTextColor 必须先找到并放好再挂钩：
+     * 类没找到走 waitFail（不放弃）；字段读不到或类型不是 int、或类里没有 onDraw(Canvas) 都算 miss（立刻放弃并记住）。
+     */
+    private static void tryDraw(ClassLoader cl, ClassLoader ctx) {
+        if (HookGuard.settled(HookGuard.CAP_DRAW)) return;
+        if (fCurColor == null) {
+            try {
+                Field f = TextView.class.getDeclaredField("mCurTextColor");
+                if (f.getType() != int.class) throw new NoSuchFieldException();
+                f.setAccessible(true);
+                fCurColor = f;
+            } catch (Throwable e) {
+                HookGuard.miss(HookGuard.CAP_DRAW, "读不到 TextView.mCurTextColor（系统限制了反射访问），绘制时改色用不了，文案改色只走 setText 那条路");
+                return;
+            }
+        }
+        HookGuard.hook(HookGuard.CAP_DRAW, MENTION, ON_DRAW, DRAW_HOOK,
+                "MentionTextView 里没有 onDraw(Canvas)（文案的绘制方法变了，需要重新用 TextRec 看绘制栈）", cl, ctx);
+    }
+
+    /** 画文案之前换色、之后换回来。只处理 styleCaption 认出并打过 tag 的文案控件；任何异常都不能抛回抖音。 */
+    private static final class DrawHook extends XC_MethodHook {
+        @Override
+        protected void beforeHookedMethod(MethodHookParam p) {
+            drawSwapped = false;
+            try {
+                int want = DanmakuHook.cfg.capColor;
+                Field f = fCurColor;
+                Object self = p.thisObject;
+                if (want == 0 || f == null || !(self instanceof TextView)) return;
+                if (((View) self).getTag(CAP_TAG) == null) return;
+                int old = f.getInt(self);
+                if (old == want) return;
+                drawSaved = old;
+                f.setInt(self, want);
+                drawSwapped = true;
+            } catch (Throwable ignored) {
+            }
+        }
+
+        @Override
+        protected void afterHookedMethod(MethodHookParam p) {
+            if (!drawSwapped) return;
+            drawSwapped = false;
+            try {
+                Field f = fCurColor;
+                if (f != null && p.thisObject != null) f.setInt(p.thisObject, drawSaved);
+            } catch (Throwable ignored) {
+            }
+        }
     }
 
     /**
@@ -735,6 +815,7 @@ final class PubHook {
         if (!c.capOutline && c.capColor == 0) return;
         if (!(v instanceof TextView)) return;
         TextView t = (TextView) v;
+        if (t.getTag(CAP_TAG) == null) t.setTag(CAP_TAG, Boolean.TRUE); // 认出是视频文案：cap.draw 只改打过 tag 的
         if (c.capColor != 0 && t.getCurrentTextColor() != c.capColor) t.setTextColor(c.capColor);
         if (c.capOutline) {
             float r = 3f * t.getResources().getDisplayMetrics().density;
