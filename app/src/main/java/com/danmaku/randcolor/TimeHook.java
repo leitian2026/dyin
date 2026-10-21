@@ -1,24 +1,21 @@
 package com.danmaku.randcolor;
 
 import android.app.Activity;
-import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.view.Gravity;
 import android.view.View;
-import android.view.ViewGroup;
-import android.widget.FrameLayout;
 import android.widget.TextView;
 
-import java.lang.ref.WeakReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import de.robv.android.xposed.XC_MethodHook;
 
 /**
- * 视频时长常显：自己画一个 "00:12 / 03:45"，不用抖音的时间控件。
+ * 视频时长常显：自己放一行 "00:12 / 03:45"，不用抖音的时间控件。
+ * 1.22.0 起这一行是当前视频的 AwemeIntroInfoLayout 里的一个 TextView，在发布信息那一行的正下方（没显示发布信息就在文案下面），
+ * 由 PubHook.timeView() 负责放进去并设字号、颜色；位置浮窗（TimePanel）和 timeX / timeY 都删了。
  *
  * 全部来自 SimPlayer 公共监听层 OnUIPlayListenerDelegate（40.7.0，主线程；名字都没混淆，第一个参数是视频 id）。
  * 依据 TextRec 1.22.4 的追踪：
@@ -31,8 +28,6 @@ import de.robv.android.xposed.XC_MethodHook;
  *
  * 没有定时器 / 轮询：文字只在上面这些回调里更新或隐藏。换视频后 1 秒内忽略刚离开的那个视频的进度回调
  * （时间戳比较，不是定时器；还没有找到能替代它的事件钩子，所以保留）。
- *
- * 位置（px）由抖音里的位置浮窗（TimePanel）调整。
  */
 final class TimeHook {
     private TimeHook() {}
@@ -42,7 +37,6 @@ final class TimeHook {
     private static final String PROGRESS = "onPlayProgressChange";
 
     private static final long STALE_MS = 1000;  // 离开 / 换视频后忽略旧视频进度回调的时间
-    private static final String PLACEHOLDER = "00:00 / --:--";
     private static final Pattern DURATION = Pattern.compile("duration=(\\d+)");
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper()); // 只用来把非主线程的事件转回主线程
@@ -51,14 +45,10 @@ final class TimeHook {
     private static final XC_MethodHook STOP_HOOK = new StopHook();
     private static final XC_MethodHook PLAYING_HOOK = new PlayingHook();
 
-    private static WeakReference<TextView> viewRef = new WeakReference<>(null);
-
     // 状态（都在主线程用）
     private static String lastId, staleId;
     private static long lastSec = -1, lastDsec = -2, staleUntil;
     private static String lastText = "";
-    private static int lastDx = Integer.MIN_VALUE, lastDy = Integer.MIN_VALUE;
-    private static int lastSize;
     private static boolean shown;
 
     // ------------------------------------------------------------ 安装
@@ -85,9 +75,9 @@ final class TimeHook {
         return Looper.myLooper() == Looper.getMainLooper();
     }
 
-    /** 时长文字是否应该存在：设置里开了，或者位置浮窗正开着在调它（调位置时即使没开也要看得到）。 */
+    /** 时长文字是否应该存在：设置里开了。 */
     private static boolean enabled() {
-        return DanmakuHook.cfg.timeAlways || (TimePanel.isOpen() && TimePanel.target() == TimePanel.TIME);
+        return DanmakuHook.cfg.timeAlways;
     }
 
     // ------------------------------------------------------------ 钩子
@@ -177,7 +167,7 @@ final class TimeHook {
         if (dms <= 0) return;                   // 没取到时长就交给第一个进度回调
         lastSec = 0;
         lastDsec = dms / 1000;
-        show(CommentHook.top.get(), fmt(0) + " / " + fmt(lastDsec));
+        show(fmt(0) + " / " + fmt(lastDsec));
     }
 
     /** PlayerEvent{id='…', codecType=0, duration=26331, …}：从 toString 里取 duration（毫秒），不依赖字段名。 */
@@ -218,7 +208,7 @@ final class TimeHook {
         if (dsec >= 0 && sec > dsec) sec = dsec;
         lastSec = sec;
         lastDsec = dsec;
-        show(CommentHook.top.get(), fmt(sec) + " / " + (dsec >= 0 ? fmt(dsec) : "--:--"));
+        show(fmt(sec) + " / " + (dsec >= 0 ? fmt(dsec) : "--:--"));
     }
 
     private static String fmt(long s) {
@@ -234,94 +224,26 @@ final class TimeHook {
 
     // ------------------------------------------------------------ 显示
 
-    /** 抖音里任何还活着的界面都可以放。 */
-    private static boolean isHostActivity(Activity a) {
-        return a != null && !a.isFinishing() && !a.isDestroyed();
-    }
-
-    /** 位置浮窗打开时调用：没有进度回调也先画一个示例文字，好边调边看。 */
-    static void showSample(Activity a) {
-        show(a, lastText.isEmpty() ? PLACEHOLDER : lastText);
-    }
-
-    private static void show(Activity a, String text) {
-        if (!isHostActivity(a)) return;
-        TextView t = viewRef.get();
-        ViewGroup decor = (ViewGroup) a.getWindow().getDecorView();
-        float d = a.getResources().getDisplayMetrics().density;
-        if (t != null && t.getContext() != a) { // 换了 Activity：旧的拿掉重建
-            detach(t);
-            t = null;
-        }
+    /** 把文字放进当前视频的时长行（行由 PubHook 放进容器、设字号和颜色）；当前视频的容器还没认出来就先不显示。 */
+    private static void show(String text) {
+        lastText = text;
+        TextView t = PubHook.timeView();
         if (t == null) {
-            t = new TextView(a);
-            t.setTypeface(Typeface.DEFAULT_BOLD);
-            t.setTextColor(0xFFFFFFFF);
-            t.setShadowLayer(5f * d, 0f, 0f, 0xFF000000); // 黑色描边感，亮暗背景都看得清
-            t.setIncludeFontPadding(false);
-            t.setClickable(false);
-            t.setFocusable(false);
-            try {
-                t.setFontFeatureSettings("tnum"); // 等宽数字，秒数跳动时不抖
-            } catch (Throwable ignored) {
-            }
-            t.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-            viewRef = new WeakReference<>(t);
-            lastText = "";
-            lastDx = lastDy = Integer.MIN_VALUE;
-            lastSize = 0;
+            shown = false;
+            return;
         }
-        View panel = TimePanel.view();
-        boolean moved = false;
-        if (t.getParent() != decor) {
-            detach(t);
-            decor.addView(t, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
-            moved = true;
-        } else {
-            View last = decor.getChildAt(decor.getChildCount() - 1);
-            if (last != t && last != panel) {
-                t.bringToFront();
-                moved = true;
-            }
-        }
-        if (moved && panel != null && panel.getParent() == decor) panel.bringToFront(); // 浮窗始终压在文字上面
-        applySize(t);
-        applyOffset(t);
-        if (!text.equals(lastText)) {
-            lastText = text;
-            t.setText(text);
-        }
+        if (!text.contentEquals(t.getText())) t.setText(text);
         if (t.getVisibility() != View.VISIBLE) t.setVisibility(View.VISIBLE);
         shown = true;
     }
 
-    private static void applyOffset(TextView t) {
-        DanmakuConfig c = DanmakuHook.cfg;
-        if (c.timeX == lastDx && c.timeY == lastDy) return;
-        lastDx = c.timeX;
-        lastDy = c.timeY;
-        t.setTranslationX(c.timeX);
-        t.setTranslationY(c.timeY);
-    }
-
-    /** 位置浮窗拖动时实时生效。 */
-    static void applyOffsetNow() {
-        TextView t = viewRef.get();
-        if (t != null) applyOffset(t);
-    }
-
-    /** 字号（sp）：有变化才设。 */
-    private static void applySize(TextView t) {
-        int s = DanmakuHook.cfg.timeSize;
-        if (s == lastSize) return;
-        lastSize = s;
-        t.setTextSize(s);
-    }
-
-    /** 位置浮窗里点 − / + 或拖字号滑动条时实时生效。 */
-    static void applySizeNow() {
-        TextView t = viewRef.get();
-        if (t != null) applySize(t);
+    /** PubHook 刚认出当前视频的容器：进度已经在跑，就把时长放进去（不用等下一秒的进度回调）。 */
+    static void onIntroReady() {
+        try {
+            if (!isMain() || !enabled() || lastSec < 0 || lastText.isEmpty()) return;
+            show(lastText);
+        } catch (Throwable ignored) {
+        }
     }
 
     /** 立刻隐藏；下一次进度回调（或 onPlaying）会重新显示。 */
@@ -329,46 +251,25 @@ final class TimeHook {
         shown = false;
         lastSec = -1;
         lastDsec = -2;
-        TextView t = viewRef.get();
-        if (t != null) t.setVisibility(View.GONE);
+        PubHook.hideTime();
     }
 
     // ------------------------------------------------------------ 生命周期
 
-    private static void detach(View v) {
-        if (v != null && v.getParent() instanceof ViewGroup) ((ViewGroup) v.getParent()).removeView(v);
-    }
-
     private static void removeView() {
         shown = false;
-        detach(viewRef.get());
+        PubHook.removeTime();
     }
 
-    /** 位置浮窗关闭后：没开常显就把文字撤掉。 */
-    static void onPanelClosed() {
-        if (!DanmakuHook.cfg.timeAlways) removeView();
-    }
-
-    /** 回到前台（配置刚重读过）：需要时弹出位置浮窗；换了页面的文字拿掉重建；位置有变立即生效。 */
+    /** 回到前台（配置刚重读过）：没开常显就把时长行拿掉；开着的话按新的字号、颜色重新套一遍。 */
     static void onResume(Activity a) {
         try {
             if (!isMain()) return;
-            DanmakuConfig c = DanmakuHook.cfg;
-            if (c.timeAdjust && isHostActivity(a)) {
-                c.timeAdjust = false; // 一次性请求：先清掉并写回，免得下次回到前台又弹
-                DanmakuHook.saveCfg();
-                TimePanel.open(a, TimePanel.TIME);
-            } else if (TimePanel.isOpen()) {
-                TimePanel.open(a); // 换了界面：浮窗跟过去
-            }
-            TextView t = viewRef.get();
-            if (t == null) return;
-            if (!enabled() || !isHostActivity(a) || t.getContext() != a) {
+            if (!enabled()) {
                 removeView();
                 return;
             }
-            applySize(t);
-            applyOffset(t);
+            if (lastSec >= 0 && !lastText.isEmpty()) show(lastText);
         } catch (Throwable ignored) {
         }
     }
