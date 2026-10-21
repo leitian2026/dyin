@@ -2,8 +2,9 @@ package com.danmaku.randcolor;
 
 import android.app.Activity;
 import android.graphics.Rect;
+import android.graphics.Typeface;
 import android.os.Looper;
-import android.text.TextUtils;
+import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.View;
 import android.view.ViewGroup;
@@ -14,7 +15,7 @@ import android.widget.TextView;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.Calendar;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -115,6 +116,12 @@ import de.robv.android.xposed.XposedBridge;
  *  - 没有证据的部分：①抖音往这个容器里加声明行时用的是绝对下标还是相对某个控件的位置（这次导出里没有 addView 记录）。本模块的这一行插在文案后面第一个位置，
  *    声明行（原来在文案后面第 7 个）无论哪种方式都还在它后面；②抖音有没有按下标取这个容器的子控件。
  *
+ * 1.22.0：发布信息那一行可以自定义（模板 pubFormat，见 PubFormat：{日期} {时间} {地点} {省} {市} 随意排顺序、夹文字，不限长度、不截断，
+ *    放不下就自己换行）和颜色（pubColor，和文案颜色互不影响）。视频时长不再画在整个界面中间，改成同一个 AwemeIntroInfoLayout 里的另一行
+ *    TextView，放在发布信息那一行的正下方（没显示发布信息就放在文案下面）；位置浮窗和 timeX / timeY 都删了，字号 timeSize、颜色 timeColor 保留。
+ *    时长行放在「当前视频」的容器里：容器是 onPlay 时按「在屏幕上 + 文案和当前视频 desc 对得上」从已见过的容器里挑的（见 locateCurrent）。
+ *    依据：TextRec 40.7.0（textrec-tasks-20261021-150205）里每个视频页都有自己的一个 AwemeIntroInfoLayout，邻近页的容器也在、但在屏幕外。
+ *
  * 没有定时器 / 轮询：文字只在上面的回调里更新或隐藏。
  */
 final class PubHook {
@@ -126,10 +133,10 @@ final class PubHook {
     private static final String CAPTION = "com.ss.android.ugc.aweme.feed.desc.ui.ScrollMentionTextView";
     /** pub.row：作者声明和文案所在的竖直容器（40.7.0，类名没混淆，见文件头的依据）。 */
     private static final String INTRO = "com.ss.android.ugc.aweme.feed.ui.AwemeIntroInfoLayout";
-    private static final int ROW_TAG = 0x7e0b0c02, OWNER_TAG = 0x7e0b0c03; // 应用自己的 tag key
+    private static final int ROW_TAG = 0x7e0b0c02, REG_TAG = 0x7e0b0c03; // 应用自己的 tag key
     private static final String EMPTY = "";
-    /** 发布信息那一行的字色：固定，不随「文案颜色」变。 */
-    private static final int ROW_COLOR = 0xCCFFFFFF;
+    /** 发布信息 / 时长默认字色（配置里 pubColor / timeColor 为 0 时用）。 */
+    private static final int ROW_COLOR = 0xCCFFFFFF, TIME_COLOR = 0xFFFFFFFF;
     private static volatile Class<?> introCls;
 
     // pub.bind：版本相关（40.7.0），类名没混淆（TextRec 的钩点签名里就是这两个名字）
@@ -209,7 +216,7 @@ final class PubHook {
     private static final class Info {
         final long sec;
         final String ip, city, desc;
-        String line; // format() 的结果，第一次用到时算一次
+        String line, lineTpl; // PubFormat 的结果和算它用的模板（模板变了才重算）
 
         Info(long sec, String ip, String city, String desc) {
             this.sec = sec;
@@ -437,7 +444,7 @@ final class PubHook {
     // ------------------------------------------------------------ 钩子
 
     private static final class Hook extends XC_MethodHook {
-        /** 文案控件刚设了文字：更新发布信息那一行（在作者声明上方），再按需要设文案的字色 / 黑边。 */
+        /** 文案控件刚设了文字：更新发布信息那一行、记下当前视频的容器（给时长用），再按需要设文案的字色 / 黑边。 */
         @Override
         protected void afterHookedMethod(MethodHookParam p) {
             try {
@@ -447,18 +454,38 @@ final class PubHook {
                 if (sk != capMention && sk != captionCls) return;
                 if (!isMain()) return;
                 CharSequence cs = p.args[0] instanceof CharSequence ? (CharSequence) p.args[0] : EMPTY;
-                showRow((TextView) self, cs);
+                onCaption((TextView) self, cs);
                 if (styleOn()) onCaptionText((TextView) self, cs);
             } catch (Throwable ignored) {
             }
         }
     }
 
+    // ------------------------------------------------------------ 发布信息和时长：同一个容器里的两行（见文件头 1.22.0）
+
+    /** 一个 AwemeIntroInfoLayout 上挂的东西（tag ROW_TAG，主线程用）。 */
+    private static final class Rows {
+        TextView pub;       // 发布信息那一行（要显示时才建）
+        TextView cap;       // 这个容器里的文案控件
+        CharSequence text;  // 文案控件最近一次设的文字（认视频用）
+    }
+
+    private static final int MAX_INTROS = 16;
+    /** 见过的 AwemeIntroInfoLayout（弱引用，主线程用）；每个视频页一个，邻近页的也在。 */
+    private static final ArrayList<WeakReference<ViewGroup>> INTROS = new ArrayList<>();
+    private static final WeakReference<ViewGroup> NO_INTRO = new WeakReference<>(null);
+    /** 当前视频所在的容器（时长行放进它里面）；还没认出来就是空的。 */
+    private static WeakReference<ViewGroup> curIntro = NO_INTRO;
+    private static WeakReference<TextView> timeRef = new WeakReference<>(null);
+    private static int timeSzApplied = -1, timeColApplied;
+    /** 当前视频的容器没认出来时，开始播放后头几次显示时长再试几次（翻页动画完了位置才准）。 */
+    private static int locateTries;
+
     /**
-     * 发布信息这一行（见文件头 1.21.0）：文案控件 cap 刚设了文字 cs。沿父级找 AwemeIntroInfoLayout，行放在文案所在的直接子控件后面。
-     * 能认出是某个视频的文案 → 显示它的「日期 地点」；认不出 / 开关关着 / 文案是空的 → 只有这一行是 cap 设的才撤掉。主线程调用。
+     * 文案控件 cap 刚设了文字 cs：找到它所在的 AwemeIntroInfoLayout，更新发布信息那一行；
+     * 文案对得上当前视频，就把这个容器记成当前视频的容器（时长行用）。主线程调用。
      */
-    private static void showRow(TextView cap, CharSequence cs) {
+    private static void onCaption(TextView cap, CharSequence cs) {
         Class<?> ic = introCls;
         if (ic == null) return;
         ViewGroup intro = null;
@@ -474,33 +501,83 @@ final class PubHook {
             child = (View) par;
         }
         if (intro == null) return;
-        Object tag = intro.getTag(ROW_TAG);
-        TextView row = tag instanceof TextView ? (TextView) tag : null;
+        Rows r = rowsOf(intro, true);
+        if (cs.length() == 0 && r.cap != null && r.cap != cap) return; // 容器里别的控件设了空串，不算文案变了
+        r.cap = cap;
+        r.text = cs;
+        updatePub(intro, r);
+        String cur = curDesc;
+        if (cur != null && DanmakuHook.cfg.timeAlways && cs.length() > 0 && curIntro.get() != intro && sameStart(cs, cur)) {
+            curIntro = new WeakReference<>(intro);
+            TimeHook.onIntroReady();
+        }
+    }
+
+    /** 取这个容器上的 Rows；create 为真时没有就新建并登记。 */
+    private static Rows rowsOf(ViewGroup intro, boolean create) {
+        Object o = intro.getTag(ROW_TAG);
+        if (o instanceof Rows) return (Rows) o;
+        if (!create) return null;
+        Rows r = new Rows();
+        intro.setTag(ROW_TAG, r);
+        INTROS.add(new WeakReference<>(intro));
+        if (INTROS.size() > MAX_INTROS) {
+            for (int i = INTROS.size() - 1; i >= 0; i--) if (INTROS.get(i).get() == null) INTROS.remove(i);
+        }
+        return r;
+    }
+
+    /** cap 在 intro 下面的那个直接子控件；找不到返回 null。 */
+    private static View childOf(ViewGroup intro, View cap) {
+        View child = cap;
+        for (int d = 0; d < 8; d++) {
+            ViewParent par = child.getParent();
+            if (par == intro) return child;
+            if (!(par instanceof View)) return null;
+            child = (View) par;
+        }
+        return null;
+    }
+
+    /**
+     * 更新发布信息那一行：能认出是哪个视频、开关开着 → 套模板显示（字号、颜色用配置）；否则撤掉。
+     * 行放在文案所在的直接子控件后面（有作者声明时就在声明上方）。不限长度、不截断，一行放不下由 TextView 自己换行。
+     */
+    private static void updatePub(ViewGroup intro, Rows r) {
         DanmakuConfig c = DanmakuHook.cfg;
-        String line = c.pubAlways && cs.length() > 0 ? lineFor(cs) : null;
+        TextView cap = r.cap;
+        CharSequence cs = r.text;
+        TextView row = r.pub;
+        String line = c.pubAlways && cap != null && cs != null && cs.length() > 0 ? lineFor(cs, c.pubFormat) : null;
         if (line == null) {
-            if (row != null && row.getTag(OWNER_TAG) == cap && row.getVisibility() != View.GONE) row.setVisibility(View.GONE);
+            if (row != null && row.getVisibility() != View.GONE) row.setVisibility(View.GONE);
             return;
         }
         if (row == null || row.getParent() != intro) {
+            View child = childOf(intro, cap);
+            if (child == null) return;
             row = newRow(cap);
-            intro.setTag(ROW_TAG, row);
+            r.pub = row;
             intro.addView(row, intro.indexOfChild(child) + 1);
         }
-        row.setTag(OWNER_TAG, cap);
         row.setTextSize(TypedValue.COMPLEX_UNIT_SP, c.pubSize);
-        if (row.getCurrentTextColor() != ROW_COLOR) row.setTextColor(ROW_COLOR); // 固定色，不跟文案颜色（capColor）走
+        int color = c.pubColor != 0 ? c.pubColor : ROW_COLOR;
+        if (row.getCurrentTextColor() != color) row.setTextColor(color);
         if (!line.contentEquals(row.getText())) row.setText(line);
         if (row.getVisibility() != View.VISIBLE) row.setVisibility(View.VISIBLE);
     }
 
-    /** 新建这一行：单行、一圈黑边；左边距和文案对齐（取文案父控件的 leftMargin），宽度按文字。 */
+    /** 新建发布信息这一行：一圈黑边；左边距和文案对齐，宽度按文字、放不下就换行，不截断。 */
     private static TextView newRow(TextView cap) {
         TextView t = new TextView(cap.getContext());
-        t.setSingleLine(true);
-        t.setEllipsize(TextUtils.TruncateAt.END);
         float d = t.getResources().getDisplayMetrics().density;
         t.setShadowLayer(3f * d, 0f, 0f, 0xFF000000);
+        t.setLayoutParams(rowLp(cap, d));
+        return t;
+    }
+
+    /** 两行（发布信息 / 时长）共用的布局参数：左边距取文案父控件的 leftMargin。 */
+    private static LinearLayout.LayoutParams rowLp(TextView cap, float d) {
         int left = 0;
         ViewParent cp = cap.getParent();
         if (cp instanceof View) {
@@ -511,12 +588,11 @@ final class PubHook {
         lp.leftMargin = left > 0 ? left : Math.round(12f * d);
         lp.topMargin = Math.round(2f * d);
         lp.bottomMargin = Math.round(4f * d);
-        t.setLayoutParams(lp);
-        return t;
+        return lp;
     }
 
-    /** 这段文案是哪个视频的：开头和某个视频的 desc 相同（忽略空白和竖线），返回那个视频的「日期 地点」；认不出返回 null。 */
-    private static String lineFor(CharSequence cs) {
+    /** 这段文案是哪个视频的：套那个视频的模板返回「发布信息」；认不出返回 null。结果按模板缓存在 Info 里，模板变了才重算。 */
+    private static String lineFor(CharSequence cs, String tpl) {
         Info hit = null;
         synchronized (INFO) {
             for (Info i : INFO.values()) {
@@ -528,8 +604,188 @@ final class PubHook {
         }
         if (hit == null) return null;
         String l = hit.line;
-        if (l == null) hit.line = l = format(hit);
+        if (l == null || hit.lineTpl == null || !hit.lineTpl.equals(tpl)) {
+            hit.line = l = PubFormat.render(tpl, hit.sec, hit.ip, cityName(hit.city));
+            hit.lineTpl = tpl;
+        }
         return l;
+    }
+
+    // ------------------------------------------------------------ 视频时长那一行
+
+    /**
+     * 视频时长那一行：放进当前视频的 AwemeIntroInfoLayout，发布信息那一行的正下方（没显示发布信息就在文案下面）；
+     * 字号、颜色用配置（timeSize / timeColor）。当前视频的容器还没认出来返回 null。主线程调用（TimeHook 用）。
+     */
+    static TextView timeView() {
+        ViewGroup intro = curIntro.get();
+        if (intro == null) {
+            if (locateTries <= 0) return null;
+            locateTries--;
+            if (curDesc == null && locateTries == 2) return null; // 没有 desc 只能按位置认：第一次多半还在翻页动画里，等下一次
+            intro = locateCurrent();
+            if (intro == null) return null;
+            curIntro = new WeakReference<>(intro);
+        }
+        if (!intro.isAttachedToWindow()) return null;
+        Rows r = rowsOf(intro, false);
+        if (r == null || r.cap == null) return null;
+        View anchor = r.pub != null && r.pub.getParent() == intro ? r.pub : childOf(intro, r.cap);
+        if (anchor == null) return null;
+        TextView t = timeRef.get();
+        if (t != null && t.getContext() != intro.getContext()) { // 换了界面：旧的拿掉重建
+            detach(t);
+            t = null;
+        }
+        if (t == null) {
+            t = new TextView(intro.getContext());
+            float d = t.getResources().getDisplayMetrics().density;
+            t.setTypeface(Typeface.DEFAULT_BOLD);
+            t.setIncludeFontPadding(false);
+            t.setShadowLayer(5f * d, 0f, 0f, 0xFF000000); // 黑色描边感，亮暗背景都看得清
+            t.setClickable(false);
+            t.setFocusable(false);
+            try {
+                t.setFontFeatureSettings("tnum"); // 等宽数字，秒数跳动时不抖
+            } catch (Throwable ignored) {
+            }
+            t.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            t.setLayoutParams(rowLp(r.cap, d));
+            timeRef = new WeakReference<>(t);
+            timeSzApplied = -1;
+            timeColApplied = 0;
+        }
+        if (t.getParent() == intro) {
+            if (intro.indexOfChild(t) != intro.indexOfChild(anchor) + 1) {
+                intro.removeView(t);
+                intro.addView(t, intro.indexOfChild(anchor) + 1);
+            }
+        } else {
+            detach(t);
+            intro.addView(t, intro.indexOfChild(anchor) + 1);
+        }
+        DanmakuConfig c = DanmakuHook.cfg;
+        if (c.timeSize != timeSzApplied) {
+            timeSzApplied = c.timeSize;
+            t.setTextSize(TypedValue.COMPLEX_UNIT_SP, c.timeSize);
+        }
+        int color = c.timeColor != 0 ? c.timeColor : TIME_COLOR;
+        if (color != timeColApplied) {
+            timeColApplied = color;
+            t.setTextColor(color);
+        }
+        return t;
+    }
+
+    /** 时长行先藏起来（离开视频）；下一次显示时会再放到当前视频的容器里。 */
+    static void hideTime() {
+        TextView t = timeRef.get();
+        if (t != null && t.getVisibility() != View.GONE) t.setVisibility(View.GONE);
+    }
+
+    /** 时长行从界面上拿掉（开关关了）。 */
+    static void removeTime() {
+        detach(timeRef.get());
+    }
+
+    private static void detach(View v) {
+        if (v != null && v.getParent() instanceof ViewGroup) ((ViewGroup) v.getParent()).removeView(v);
+    }
+
+    // ------------------------------------------------------------ 认当前视频的容器
+
+    /**
+     * 当前视频的容器：先从见过的容器里挑「在屏幕上」的（邻近页的容器也在、但在屏幕外），文案对得上当前视频 desc 的优先；
+     * 一个都挑不到（hook 装得晚，容器的文案早就设过了）就扫一遍当前界面里的 AwemeIntroInfoLayout 再挑。找不到返回 null。
+     */
+    private static ViewGroup locateCurrent() {
+        Class<?> ic = introCls;
+        if (ic == null) return null;
+        ViewGroup g = pickIntro();
+        if (g != null) return g;
+        Activity a = CommentHook.top.get();
+        if (!isHostActivity(a)) return null;
+        scanIntros(a.getWindow().getDecorView(), ic);
+        return pickIntro();
+    }
+
+    /**
+     * 两遍：第一遍只看文案对不对得上当前视频的 desc（不看位置：onPlaying 来的时候翻页动画可能还没完，新页的容器还在屏幕外）；
+     * 没有 desc 或对不上，第二遍才按位置挑「在屏幕上」的（邻近页的容器在屏幕外）。
+     */
+    private static ViewGroup pickIntro() {
+        Activity a = CommentHook.top.get();
+        View decor = isHostActivity(a) ? a.getWindow().getDecorView() : null;
+        String cur = curDesc;
+        ViewGroup any = null;
+        for (int i = INTROS.size() - 1; i >= 0; i--) {
+            ViewGroup g = INTROS.get(i).get();
+            if (g == null) {
+                INTROS.remove(i);
+                continue;
+            }
+            if (!g.isAttachedToWindow()) continue;
+            if (decor != null && g.getRootView() != decor) continue; // 别的界面（被盖在下面的）
+            if (cur != null) {
+                Rows r = rowsOf(g, false);
+                if (r != null && r.text != null && r.text.length() > 0 && sameStart(r.text, cur)) return g;
+            }
+            if (any == null && onScreen(g)) any = g;
+        }
+        return any;
+    }
+
+    /** 容器左上角在屏幕里：翻页时邻近页的容器差一个屏幕高度（上下）或宽度（左右标签页）。 */
+    private static boolean onScreen(ViewGroup g) {
+        g.getLocationOnScreen(LOC);
+        DisplayMetrics dm = g.getResources().getDisplayMetrics();
+        return LOC[1] >= 0 && LOC[1] < dm.heightPixels && LOC[0] > -dm.widthPixels / 2 && LOC[0] < dm.widthPixels / 2;
+    }
+
+    private static void scanIntros(View v, Class<?> ic) {
+        if (v == null) return;
+        if (ic.isInstance(v)) {
+            ViewGroup g = (ViewGroup) v;
+            Rows r = rowsOf(g, true);
+            if (r.cap == null) {
+                View f = findCap(g);
+                if (f instanceof TextView) {
+                    r.cap = (TextView) f;
+                    r.text = ((TextView) f).getText();
+                }
+            }
+            return;
+        }
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0, n = g.getChildCount(); i < n; i++) scanIntros(g.getChildAt(i), ic);
+        }
+    }
+
+    private static View findCap(View v) {
+        Class<?> k = v.getClass();
+        if (k == captionCls || k == capMention) return v;
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0, n = g.getChildCount(); i < n; i++) {
+                View f = findCap(g.getChildAt(i));
+                if (f != null) return f;
+            }
+        }
+        return null;
+    }
+
+    /** 回到前台（配置刚重读过）：已经见过的容器按新配置（开关、模板、字号、颜色）重新套一遍。 */
+    private static void refreshRows() {
+        for (int i = INTROS.size() - 1; i >= 0; i--) {
+            ViewGroup g = INTROS.get(i).get();
+            if (g == null) {
+                INTROS.remove(i);
+                continue;
+            }
+            Rows r = rowsOf(g, false);
+            if (r != null && r.cap != null && r.text != null) updatePub(g, r);
+        }
     }
 
     /**
@@ -696,29 +952,6 @@ final class PubHook {
         if (styleOn() && matchesAny(cs)) styleCaption(t);
     }
 
-    /** 发布时间 → 「2026-10-19 11:50:00 广西 南宁」（createTime 是秒级时间戳，按手机时区；后面是省和市，有才写）。 */
-    private static String format(Info r) {
-        Calendar c = Calendar.getInstance();
-        c.setTimeInMillis(r.sec * 1000L);
-        StringBuilder b = new StringBuilder(32);
-        b.append(c.get(Calendar.YEAR)).append('-');
-        two(b, c.get(Calendar.MONTH) + 1).append('-');
-        two(b, c.get(Calendar.DAY_OF_MONTH)).append(' ');
-        two(b, c.get(Calendar.HOUR_OF_DAY)).append(':');
-        two(b, c.get(Calendar.MINUTE)).append(':');
-        two(b, c.get(Calendar.SECOND));
-        String ip = r.ip;
-        if (ip != null) {
-            ip = ip.trim();
-            if (!ip.isEmpty()) b.append(' ').append(ip);
-        } else {
-            ip = "";
-        }
-        String city = cityName(r.city);
-        if (city != null && !ip.contains(city) && !city.contains(ip)) b.append(' ').append(city); // 北京 / 北京 这种重复只写一次
-        return b.toString();
-    }
-
     /** Aweme.city（6 位行政区划代码，如 "450100"）→ 城市简称；不是 6 位数字或表里没有就返回 null。 */
     private static String cityName(String code) {
         if (code == null || code.length() != 6) return null;
@@ -733,16 +966,11 @@ final class PubHook {
         return e > s0 ? CITIES.substring(s0, e) : null;
     }
 
-    private static StringBuilder two(StringBuilder b, int v) {
-        if (v < 10) b.append('0');
-        return b.append(v);
-    }
-
     // ------------------------------------------------------------ 视频切换（由 TimeHook 里已有的播放器监听转进来，主线程）
 
     /**
-     * 某个视频开始播放：换了视频就把上一个视频的文字撤掉（位置浮窗开着时保留示例），再按 id 查 bind 时记下的发布时间地点显示出来；
-     * 查不到（hook 装得晚、不是 feed 里的视频）就什么都不显示。onPlaying 每个视频会来很多次，同一个 id 第二次起直接返回。
+     * 某个视频开始播放：记下它的 id 和 desc（认文案用），并认出它所在的容器（开了时长常显才认，时长行要放进去）。
+     * 查不到（hook 装得晚、不是 feed 里的视频）就什么都不记。onPlaying 每个视频会来很多次，同一个 id 第二次起直接返回。
      */
     static void onPlay(String id) {
         if (id == null || id.equals(curId)) return;
@@ -752,6 +980,10 @@ final class PubHook {
             r = INFO.get(id);
         }
         curDesc = r == null ? null : r.desc;
+        // 时长行要放进当前视频的容器：有 desc 才在这里认（靠文案对得上）；没有的等头几次显示时长时再按位置认（见 timeView）
+        ViewGroup g = DanmakuHook.cfg.timeAlways && curDesc != null ? locateCurrent() : null;
+        curIntro = g == null ? NO_INTRO : new WeakReference<>(g);
+        locateTries = 3;
         refreshCaption(CommentHook.top.get());
     }
 
@@ -859,6 +1091,7 @@ final class PubHook {
         try {
             if (!isMain()) return;
             refreshCaption(a);
+            refreshRows();
         } catch (Throwable ignored) {
         }
     }
