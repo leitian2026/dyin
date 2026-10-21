@@ -32,6 +32,16 @@ public final class DanmakuConfig {
     public boolean capOutline = false;
     /** 视频文案的颜色（0xAARRGGBB，不透明）；0 = 不改，用抖音原来的颜色。话题、@ 这类抖音自己上色的文字不受影响。 */
     public int capColor = 0;
+    /** 直播间里显示开播时间（只在直播间页面里画，别处不显示）。 */
+    public boolean liveTime = false;
+    /** 取哪个时间：0 = 开播时间（没有就用创建时间）  1 = 房间创建时间。 */
+    public int liveSrc = 0;
+    /** 开播时间文字的字号（sp）、颜色（0xAARRGGBB 不透明；0 = 默认白色）。 */
+    public int liveSize = 14, liveColor = 0;
+    /** 位置：文字左上角在「直播页剩余空间」里的百分比，0 = 最左 / 最上，100 = 最右 / 最下（文字始终完整显示在页面里）。 */
+    public int liveX = 3, liveY = 10;
+    /** 开播时间那一行的模板，见 LiveFormat。 */
+    public String liveFormat = LiveFormat.DEFAULT;
     public static final int SIZE_MIN = 8, SIZE_MAX = 40;
     /** 首页顶部标签行里要隐藏的标签（"热点"、"同城"……），取消勾选后要重启抖音才恢复显示。 */
     public String[] hiddenTabs = new String[0];
@@ -55,6 +65,13 @@ public final class DanmakuConfig {
             p.setProperty("capOutline", String.valueOf(capOutline));
             p.setProperty("capColor", String.valueOf(capColor));
             p.setProperty("idleExitMin", String.valueOf(idleExitMin));
+            p.setProperty("liveTime", String.valueOf(liveTime));
+            p.setProperty("liveSrc", String.valueOf(liveSrc));
+            p.setProperty("liveSize", String.valueOf(liveSize));
+            p.setProperty("liveColor", String.valueOf(liveColor));
+            p.setProperty("liveX", String.valueOf(liveX));
+            p.setProperty("liveY", String.valueOf(liveY));
+            p.setProperty("liveFormat", liveFormat == null ? LiveFormat.DEFAULT : liveFormat);
             StringBuilder sb = new StringBuilder();
             for (String s : hiddenTabs) sb.append(sb.length() == 0 ? "" : ",").append(s);
             p.setProperty("hiddenTabs", sb.toString());
@@ -103,6 +120,14 @@ public final class DanmakuConfig {
         c.pubColor = parseColor(p.getProperty("pubColor", "0"));
         String fmt = p.getProperty("pubFormat", PubFormat.DEFAULT);
         c.pubFormat = fmt == null || fmt.trim().isEmpty() ? PubFormat.DEFAULT : fmt;
+        c.liveTime = Boolean.parseBoolean(p.getProperty("liveTime", "false").trim());
+        c.liveSrc = parsePct(p.getProperty("liveSrc", "0"), 0) == 1 ? 1 : 0;
+        c.liveSize = parseSize(p.getProperty("liveSize", "14"), 14);
+        c.liveColor = parseColor(p.getProperty("liveColor", "0"));
+        c.liveX = parsePct(p.getProperty("liveX", "3"), 3);
+        c.liveY = parsePct(p.getProperty("liveY", "10"), 10);
+        String lf = p.getProperty("liveFormat", LiveFormat.DEFAULT);
+        c.liveFormat = lf == null || lf.trim().isEmpty() ? LiveFormat.DEFAULT : lf;
         List<String> tabs = split(p.getProperty("hiddenTabs", ""));
         c.hiddenTabs = tabs.toArray(new String[0]);
         try {
@@ -120,6 +145,15 @@ public final class DanmakuConfig {
     private static int parseSize(String v, int def) {
         try {
             return Math.max(SIZE_MIN, Math.min(SIZE_MAX, Integer.parseInt(v.trim())));
+        } catch (Throwable t) {
+            return def;
+        }
+    }
+
+    /** 0～100 的整数（位置百分比）；读不懂用默认值。 */
+    private static int parsePct(String v, int def) {
+        try {
+            return Math.max(0, Math.min(100, Integer.parseInt(v.trim())));
         } catch (Throwable t) {
             return def;
         }
