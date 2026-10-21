@@ -2,7 +2,6 @@ package com.danmaku.randcolor;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
@@ -12,7 +11,9 @@ import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -25,6 +26,7 @@ import android.widget.TextView;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Calendar;
 import java.util.List;
 import java.util.Properties;
 
@@ -42,14 +44,13 @@ public class MainActivity extends Activity {
     private final CheckBox[] cbTabs = new CheckBox[TAB_LABELS.length];
     private Switch swEnabled, swLikeBtn, swDtap, swTime, swPub;
     private LinearLayout segMode, statusCard;
-    private TextView tvOffset, tvPubSize;
-    private int tX, tY;
-    /** 时长 / 发布信息文字的字号（sp），和视频文案的颜色（0 = 不改）；字号在抖音的位置浮窗里调，回到本页同步。 */
-    private int tSize = 20, pSize = 16, capColor;
+    /** 时长 / 发布信息的字号（sp）、三处颜色（0 = 默认 / 不改）、发布信息模板和它的预览。 */
+    private SizeField timeSizeF, pubSizeF;
+    private ColorField timeColorF, pubColorF, capColorF;
+    private EditText etPubFmt;
+    private TextView tvPubPreview;
     private Switch swCapOutline;
-    private View capSwatch;
-    private TextView tvCapColor;
-    private TextView tvStatus, btnPush, btnAdjust, btnHooks;
+    private TextView tvStatus, btnPush, btnHooks;
     private ScrollView scroll;
 
     @Override
@@ -135,67 +136,87 @@ public class MainActivity extends Activity {
         root.addView(section("视频时长常显"));
         LinearLayout tm = card();
         swTime = new Switch(this);
-        tm.addView(switchRow("视频时长一直显示", "在视频上自己画一行 00:12 / 03:45，抖音任何界面都显示，播放时随进度走动；刷到直播或离开视频页自动隐藏", swTime));
+        tm.addView(switchRow("视频时长一直显示", "在视频文案下面单独显示一行 00:12 / 03:45：有发布日期和地点时放在它的正下方；播放时随进度走动；刷到直播或离开视频页自动隐藏", swTime));
         tm.addView(divider());
-        tm.addView(tv("位置微调", 17, cText, true));
-        TextView td = tv("点下面的按钮，会在抖音里弹出一个浮窗：三条滑动条：水平、垂直、字号（左边减、右边加），两端的 − / + 每点一下移动 2 像素（字号是增减 1 号），一边调一边看时长怎么动。点浮窗里的「完成」自动保存，回到本页会同步数值。需要 root。", 13, cSub, false);
+        tm.addView(tv("字号", 17, cText, true));
+        TextView td = tv("8～40 sp，默认 20。位置由抖音的布局决定（发布日期和地点下面），不用调。点「保存并应用」后，抖音回到前台就生效。", 13, cSub, false);
         td.setPadding(0, dp(2), 0, dp(12));
         tm.addView(td);
-        tvOffset = tv("", 14, cSub, false);
-        tvOffset.setTypeface(Typeface.MONOSPACE);
-        tvOffset.setPadding(0, 0, 0, dp(12));
-        tm.addView(tvOffset);
-        LinearLayout btns = new LinearLayout(this);
-        btns.setOrientation(LinearLayout.HORIZONTAL);
-        btnAdjust = pillButton("打开浮窗调整位置", true);
-        btnAdjust.setTextSize(16);
-        btnAdjust.setOnClickListener(v -> openAdjust());
-        btns.addView(btnAdjust, new LinearLayout.LayoutParams(0, dp(48), 1f));
-        TextView reset = pillButton("归零", false);
-        reset.setTextSize(16);
-        reset.setOnClickListener(v -> {
-            tX = 0;
-            tY = 0;
-            showOffset();
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("adjusting", false).apply();
-        });
-        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(dp(88), dp(48));
-        rl.leftMargin = dp(10);
-        btns.addView(reset, rl);
-        tm.addView(btns);
+        timeSizeF = new SizeField(20);
+        tm.addView(timeSizeF.build());
+        tm.addView(divider());
+        tm.addView(tv("颜色", 17, cText, true));
+        TextView tcd = tv("点「选色」从色表里挑一个，也可以输入自己的色值。和视频文案的颜色互不影响。", 13, cSub, false);
+        tcd.setPadding(0, dp(2), 0, dp(12));
+        tm.addView(tcd);
+        timeColorF = new ColorField("默认（白色）", "选择时长颜色");
+        tm.addView(timeColorF.build());
         root.addView(tm, cardLp());
 
         // ---- 发布日期和地点常显
         root.addView(section("发布日期和地点常显"));
         LinearLayout pb = card();
         swPub = new Switch(this);
-        pb.addView(switchRow("发布日期和地点一直显示", "在作者声明上方单独显示一行「2026-10-19 11:50:00 广西 南宁」；没有作者声明的视频，就显示在声明本来的位置；取自视频本身的发布时间（精确到秒）和 IP 属地（省，有城市就加市），不用点「展开」；没有地点的视频只显示时间", swPub));
+        pb.addView(switchRow("发布日期和地点一直显示", "在视频文案下面单独显示一行（有作者声明时在声明上方）；取自视频本身的发布时间（精确到秒）和 IP 属地（省，有城市就加市），不用点「展开」", swPub));
+        pb.addView(divider());
+        pb.addView(tv("显示内容和顺序", 17, cText, true));
+        TextView pfd = tv("想怎么排就怎么排，想加什么字就加什么字：下面的按钮会在光标处插入 {日期} {时间} {地点} {省} {市}，也可以自己打字，比如「发布时间：{日期} {时间}」，或者把地点放前面。写 \\n 表示换行。不限长度，太长会自动换行，不会被截断。", 13, cSub, false);
+        pfd.setPadding(0, dp(2), 0, dp(10));
+        pb.addView(pfd);
+        etPubFmt = field();
+        etPubFmt.setHint(PubFormat.DEFAULT);
+        etPubFmt.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int st, int c, int a) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int st, int b, int c) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable e) {
+                updatePubPreview();
+            }
+        });
+        pb.addView(etPubFmt);
+        LinearLayout chips = new LinearLayout(this);
+        chips.setOrientation(LinearLayout.HORIZONTAL);
+        chips.setPadding(0, dp(10), 0, 0);
+        String[] toks = {"日期", "时间", "地点", "省", "市"};
+        for (int i = 0; i < toks.length; i++) {
+            final String tok = "{" + toks[i] + "}";
+            TextView chip = pillButton(toks[i], false);
+            chip.setTextSize(15);
+            chip.setOnClickListener(v -> insertToken(tok));
+            LinearLayout.LayoutParams cl = new LinearLayout.LayoutParams(0, dp(44), 1f);
+            if (i > 0) cl.leftMargin = dp(6);
+            chips.addView(chip, cl);
+        }
+        pb.addView(chips);
+        TextView resetFmt = pillButton("恢复默认顺序", false);
+        resetFmt.setTextSize(15);
+        resetFmt.setOnClickListener(v -> etPubFmt.setText(PubFormat.DEFAULT));
+        LinearLayout.LayoutParams rfl = new LinearLayout.LayoutParams(-1, dp(44));
+        rfl.topMargin = dp(8);
+        pb.addView(resetFmt, rfl);
+        tvPubPreview = tv("", 14, cText, false);
+        tvPubPreview.setPadding(dp(4), dp(12), 0, 0);
+        pb.addView(tvPubPreview);
         pb.addView(divider());
         pb.addView(tv("字号", 17, cText, true));
-        TextView pdsc = tv("这一行的位置由抖音的布局决定（文案下面、作者声明上面），不用调；只能调字号（8～40 sp，默认 16）。点「保存并应用」后，抖音回到前台、划到下一个视频时生效。", 13, cSub, false);
+        TextView pdsc = tv("8～40 sp，默认 16。位置由抖音的布局决定（文案下面、作者声明上面），不用调。点「保存并应用」后，抖音回到前台、划到下一个视频时生效。", 13, cSub, false);
         pdsc.setPadding(0, dp(2), 0, dp(12));
         pb.addView(pdsc);
-        LinearLayout sz = new LinearLayout(this);
-        sz.setOrientation(LinearLayout.HORIZONTAL);
-        sz.setGravity(Gravity.CENTER_VERTICAL);
-        TextView minus = pillButton("−", false);
-        minus.setTextSize(20);
-        minus.setOnClickListener(v -> {
-            pSize = Math.max(DanmakuConfig.SIZE_MIN, pSize - 1);
-            showPubSize();
-        });
-        sz.addView(minus, new LinearLayout.LayoutParams(dp(56), dp(48)));
-        tvPubSize = tv("", 16, cText, true);
-        tvPubSize.setGravity(Gravity.CENTER);
-        sz.addView(tvPubSize, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView plus = pillButton("+", false);
-        plus.setTextSize(20);
-        plus.setOnClickListener(v -> {
-            pSize = Math.min(DanmakuConfig.SIZE_MAX, pSize + 1);
-            showPubSize();
-        });
-        sz.addView(plus, new LinearLayout.LayoutParams(dp(56), dp(48)));
-        pb.addView(sz);
+        pubSizeF = new SizeField(16);
+        pb.addView(pubSizeF.build());
+        pb.addView(divider());
+        pb.addView(tv("颜色", 17, cText, true));
+        TextView pcd = tv("点「选色」从色表里挑一个，也可以输入自己的色值。和视频文案的颜色互不影响。", 13, cSub, false);
+        pcd.setPadding(0, dp(2), 0, dp(12));
+        pb.addView(pcd);
+        pubColorF = new ColorField("默认（半透明白）", "选择发布信息颜色");
+        pb.addView(pubColorF.build());
         root.addView(pb, cardLp());
 
         // ---- 视频文案样式
@@ -208,19 +229,8 @@ public class MainActivity extends Activity {
         TextView cpd = tv("点「选色」从色表里挑一个颜色；话题、@ 这类抖音自己上色的文字不变。选「不改」就用抖音原来的颜色（选过颜色再改回「不改」，要重启抖音才恢复）。", 13, cSub, false);
         cpd.setPadding(0, dp(2), 0, dp(12));
         cp.addView(cpd);
-        LinearLayout crow = new LinearLayout(this);
-        crow.setOrientation(LinearLayout.HORIZONTAL);
-        crow.setGravity(Gravity.CENTER_VERTICAL);
-        capSwatch = new View(this);
-        crow.addView(capSwatch, new LinearLayout.LayoutParams(dp(28), dp(28)));
-        tvCapColor = tv("", 14, cSub, false);
-        tvCapColor.setPadding(dp(12), 0, 0, 0);
-        crow.addView(tvCapColor, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView pick = pillButton("选色", true);
-        pick.setTextSize(16);
-        pick.setOnClickListener(v -> showPalette());
-        crow.addView(pick, new LinearLayout.LayoutParams(dp(88), dp(48)));
-        cp.addView(crow);
+        capColorF = new ColorField("不改（抖音原来的颜色）", "选择文案颜色");
+        cp.addView(capColorF.build());
         root.addView(cp, cardLp());
 
         // ---- 首页顶部标签
@@ -304,17 +314,14 @@ public class MainActivity extends Activity {
             for (String h : c.hiddenTabs) if (TAB_LABELS[i].equals(h)) hide = true;
             cbTabs[i].setChecked(hide);
         }
-        tX = c.timeX;
-        tY = c.timeY;
-        showOffset();
         swPub.setChecked(c.pubAlways);
-        tSize = c.timeSize;
-        pSize = c.pubSize;
-        showOffset();
-        showPubSize();
+        timeSizeF.set(c.timeSize);
+        pubSizeF.set(c.pubSize);
+        etPubFmt.setText(c.pubFormat);
+        timeColorF.set(c.timeColor);
+        pubColorF.set(c.pubColor);
         swCapOutline.setChecked(c.capOutline);
-        capColor = c.capColor;
-        showCapColor();
+        capColorF.set(c.capColor);
         setSeg(segMode, c.mode == 1 ? 1 : 0);
     }
 
@@ -325,13 +332,15 @@ public class MainActivity extends Activity {
         c.likeBtnToComment = swLikeBtn.isChecked();
         c.dtapToComment = swDtap.isChecked();
         c.timeAlways = swTime.isChecked();
-        c.timeX = tX;
-        c.timeY = tY;
         c.pubAlways = swPub.isChecked();
-        c.timeSize = tSize;
-        c.pubSize = pSize;
+        c.timeSize = timeSizeF.v;
+        c.pubSize = pubSizeF.v;
+        String fmt = etPubFmt.getText().toString();
+        c.pubFormat = fmt.trim().isEmpty() ? PubFormat.DEFAULT : fmt;
+        c.timeColor = timeColorF.color;
+        c.pubColor = pubColorF.color;
         c.capOutline = swCapOutline.isChecked();
-        c.capColor = capColor;
+        c.capColor = capColorF.color;
         java.util.ArrayList<String> hid = new java.util.ArrayList<>();
         for (int i = 0; i < TAB_LABELS.length; i++) if (cbTabs[i].isChecked()) hid.add(TAB_LABELS[i]);
         c.hiddenTabs = hid.toArray(new String[0]);
@@ -375,86 +384,6 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    // ------------------------------------------------------------ 位置浮窗
-
-    /** 把「弹出位置浮窗」的请求（timeAdjust=true）连同当前全部设置推给抖音，然后打开抖音。 */
-    private void openAdjust() {
-        final TextView btn = btnAdjust;
-        swTime.setChecked(true);
-        DanmakuConfig c = read();
-        final String pkgs = etPkg.getText().toString().trim();
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("cfg", c.toText()).putString("pkg", pkgs).apply();
-        final List<String> list = DanmakuConfig.split(pkgs);
-        if (list.isEmpty()) {
-            showStatus("请先填目标包名", 2);
-            return;
-        }
-        c.timeAdjust = true;
-        final String pushText = c.toText();
-        setBusy(btn, true, "正在打开…");
-        showStatus("正在推送…（首次会弹出 root 授权，请允许）", 0);
-        new Thread(() -> {
-            final StringBuilder sb = new StringBuilder();
-            String first = null;
-            for (String pkg : list) {
-                if (!RootShell.validPkg(pkg)) {
-                    sb.append("✗ ").append(pkg).append("：包名格式不对\n");
-                    continue;
-                }
-                RootShell.Result r = RootShell.pushConfig(pkg, pushText);
-                if (r.out.contains("__OK__")) {
-                    if (first == null) first = pkg;
-                } else if (r.out.contains("__NOPKG__")) {
-                    sb.append("✗ ").append(pkg).append("：").append(RootShell.nopkgMsg(r.out)).append('\n');
-                } else {
-                    sb.append("✗ ").append(pkg).append("：失败(").append(r.code).append(") ").append(r.err.trim()).append('\n');
-                }
-            }
-            final String ok = first;
-            final String err = sb.toString();
-            runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) return;
-                setBusy(btn, false, "打开浮窗调整位置");
-                if (ok == null) {
-                    showStatus(err.isEmpty() ? "推送失败" : err, 2);
-                    return;
-                }
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("adjusting", true).putString("adjustPkg", ok).apply();
-                Intent i = getPackageManager().getLaunchIntentForPackage(ok);
-                if (i != null) {
-                    statusCard.setVisibility(View.GONE);
-                    startActivity(i);
-                } else {
-                    showStatus("已推送，但没找到 " + ok + " 的启动入口，请手动切到抖音，浮窗会自动弹出。", 1);
-                }
-            });
-        }).start();
-    }
-
-    /** 从抖音回到本页：把浮窗里调好的位置读回来，免得下次「保存并应用」把旧值推回去。 */
-    @Override
-    protected void onResume() {
-        super.onResume();
-        SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
-        final String pkg = sp.getString("adjustPkg", "");
-        if (!sp.getBoolean("adjusting", false) || pkg.isEmpty()) return;
-        new Thread(() -> {
-            String text = RootShell.readConfig(pkg);
-            if (text == null) return;
-            final DanmakuConfig c = DanmakuConfig.fromText(text);
-            runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) return;
-                tX = c.timeX;
-                tY = c.timeY;
-                showOffset();
-                tSize = c.timeSize;
-                showOffset();
-                SharedPreferences sp2 = getSharedPreferences(PREFS, MODE_PRIVATE);
-                sp2.edit().putString("cfg", read().toText()).putBoolean("adjusting", false).apply();
-            });
-        }).start();
-    }
-
     // ------------------------------------------------------------ 钩子状态
 
     private static final String[][] HOOK_NAMES = {
@@ -472,7 +401,7 @@ public class MainActivity extends Activity {
             {"pub.text", "发布日期地点：认文案"},
             {"pub.bind", "发布日期地点：视频数据"},
             {"pub.anchor", "视频文案：描边 / 改色"},
-            {"pub.row", "发布日期地点：声明行位置"},
+            {"pub.row", "发布日期地点 / 视频时长：所在容器"},
             {"cap.draw", "视频文案：绘制时改色"},
     };
 
@@ -529,7 +458,7 @@ public class MainActivity extends Activity {
         return b.toString().trim();
     }
 
-    // ------------------------------------------------------------ 文案颜色色表
+    // ------------------------------------------------------------ 字号 / 颜色（时长、发布信息、文案共用）
 
     /** 色表：6 列 × 4 行，名字 + 不透明 RGB。 */
     private static final String[] PAL_NAMES = {
@@ -543,34 +472,116 @@ public class MainActivity extends Activity {
             0xCE93D8, 0x9C27B0, 0x3F51B5, 0x2196F3, 0x4FC3F7, 0x00BCD4,
             0x1DE9B6, 0x4CAF50, 0xA5D6A7, 0x8BC34A, 0x8D6E63, 0xFFCCBC};
 
-    private void showCapColor() {
-        if (capSwatch == null || tvCapColor == null) return;
-        GradientDrawable g = new GradientDrawable();
-        g.setShape(GradientDrawable.OVAL);
-        g.setStroke(dp(1), cStroke);
-        if (capColor == 0) {
-            g.setColor(0x00000000);
-            tvCapColor.setText("不改（抖音原来的颜色）");
-        } else {
-            g.setColor(capColor);
-            String name = "";
-            for (int i = 0; i < PAL.length; i++) if ((PAL[i] | 0xFF000000) == capColor) name = PAL_NAMES[i] + "  ";
-            tvCapColor.setText("当前：" + name + String.format("#%06X", capColor & 0xFFFFFF));
-        }
-        capSwatch.setBackground(g);
+    /** 预览用的时间：2026-10-19 11:50:00（按手机时区）。 */
+    private static final long PREVIEW_SEC;
+
+    static {
+        Calendar c = Calendar.getInstance();
+        c.clear();
+        c.set(2026, Calendar.OCTOBER, 19, 11, 50, 0);
+        PREVIEW_SEC = c.getTimeInMillis() / 1000L;
     }
 
-    /** 弹出色表：点一个颜色就选中并关掉；「不改」恢复成抖音原色。 */
-    private void showPalette() {
+    /** 字号行：「−  字号 N sp  +」，范围 SIZE_MIN～SIZE_MAX。 */
+    private final class SizeField {
+        int v;
+        TextView label;
+
+        SizeField(int def) {
+            v = def;
+        }
+
+        View build() {
+            LinearLayout sz = new LinearLayout(MainActivity.this);
+            sz.setOrientation(LinearLayout.HORIZONTAL);
+            sz.setGravity(Gravity.CENTER_VERTICAL);
+            TextView minus = pillButton("−", false);
+            minus.setTextSize(20);
+            minus.setOnClickListener(x -> set(v - 1));
+            sz.addView(minus, new LinearLayout.LayoutParams(dp(56), dp(48)));
+            label = tv("", 16, cText, true);
+            label.setGravity(Gravity.CENTER);
+            sz.addView(label, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView plus = pillButton("+", false);
+            plus.setTextSize(20);
+            plus.setOnClickListener(x -> set(v + 1));
+            sz.addView(plus, new LinearLayout.LayoutParams(dp(56), dp(48)));
+            show();
+            return sz;
+        }
+
+        void set(int n) {
+            v = Math.max(DanmakuConfig.SIZE_MIN, Math.min(DanmakuConfig.SIZE_MAX, n));
+            show();
+        }
+
+        void show() {
+            if (label != null) label.setText("字号 " + v + " sp");
+        }
+    }
+
+    /** 颜色行：色块 + 当前颜色名 + 「选色」按钮。color = 0 表示默认。 */
+    private final class ColorField {
+        int color;
+        final String defName, dialogTitle;
+        View swatch;
+        TextView label;
+
+        ColorField(String defName, String dialogTitle) {
+            this.defName = defName;
+            this.dialogTitle = dialogTitle;
+        }
+
+        View build() {
+            LinearLayout row = new LinearLayout(MainActivity.this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            swatch = new View(MainActivity.this);
+            row.addView(swatch, new LinearLayout.LayoutParams(dp(28), dp(28)));
+            label = tv("", 14, cSub, false);
+            label.setPadding(dp(12), 0, 0, 0);
+            row.addView(label, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView pick = pillButton("选色", true);
+            pick.setTextSize(16);
+            pick.setOnClickListener(x -> showPalette(this));
+            row.addView(pick, new LinearLayout.LayoutParams(dp(88), dp(48)));
+            show();
+            return row;
+        }
+
+        void set(int c) {
+            color = c;
+            show();
+        }
+
+        void show() {
+            if (swatch == null || label == null) return;
+            GradientDrawable g = new GradientDrawable();
+            g.setShape(GradientDrawable.OVAL);
+            g.setStroke(dp(1), cStroke);
+            if (color == 0) {
+                g.setColor(0x00000000);
+                label.setText(defName);
+            } else {
+                g.setColor(color);
+                String name = "";
+                for (int i = 0; i < PAL.length; i++) if ((PAL[i] | 0xFF000000) == color) name = PAL_NAMES[i] + "  ";
+                label.setText("当前：" + name + String.format("#%06X", color & 0xFFFFFF));
+            }
+            swatch.setBackground(g);
+        }
+    }
+
+    /** 弹出色表：点一个颜色就选中并关掉；「默认」恢复成默认；也可以输入 6 位色值（如 FF8800）。 */
+    private void showPalette(final ColorField f) {
         final AlertDialog[] dlg = new AlertDialog[1];
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(16), dp(8), dp(16), dp(4));
-        TextView none = pillButton(capColor == 0 ? "✓ 不改（抖音原色）" : "不改（抖音原色）", false);
+        TextView none = pillButton((f.color == 0 ? "✓ " : "") + f.defName, false);
         none.setTextSize(15);
         none.setOnClickListener(v -> {
-            capColor = 0;
-            showCapColor();
+            f.set(0);
             dlg[0].dismiss();
         });
         LinearLayout.LayoutParams nl = new LinearLayout.LayoutParams(-1, dp(44));
@@ -593,13 +604,12 @@ public class MainActivity extends Activity {
                 g.setColor(rgb);
                 g.setStroke(dp(1), 0x66808080);
                 sw.setBackground(g);
-                if (rgb == capColor) {
+                if (rgb == f.color) {
                     sw.setText("✓");
                     sw.setTextColor(luminance(rgb) > 140 ? 0xFF000000 : 0xFFFFFFFF);
                 }
                 sw.setOnClickListener(v -> {
-                    capColor = rgb;
-                    showCapColor();
+                    f.set(rgb);
                     dlg[0].dismiss();
                 });
                 cell.addView(sw, new LinearLayout.LayoutParams(dp(40), dp(40)));
@@ -612,24 +622,62 @@ public class MainActivity extends Activity {
             }
             col.addView(row);
         }
-        dlg[0] = new AlertDialog.Builder(this).setTitle("选择文案颜色").setView(col).setNegativeButton("取消", null).create();
+        LinearLayout hex = new LinearLayout(this);
+        hex.setOrientation(LinearLayout.HORIZONTAL);
+        hex.setGravity(Gravity.CENTER_VERTICAL);
+        final EditText et = field();
+        et.setHint("自定义色值，如 FF8800");
+        hex.addView(et, new LinearLayout.LayoutParams(0, -2, 1f));
+        TextView use = pillButton("用这个", true);
+        use.setTextSize(15);
+        use.setOnClickListener(v -> {
+            int rgb = parseHex(et.getText().toString());
+            if (rgb < 0) {
+                et.setError("要 6 位 16 进制数，如 FF8800");
+                return;
+            }
+            f.set(rgb | 0xFF000000);
+            dlg[0].dismiss();
+        });
+        LinearLayout.LayoutParams ul = new LinearLayout.LayoutParams(dp(92), dp(48));
+        ul.leftMargin = dp(8);
+        hex.addView(use, ul);
+        LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-1, -2);
+        hl.topMargin = dp(4);
+        col.addView(hex, hl);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(col, new ViewGroup.LayoutParams(-1, -2));
+        dlg[0] = new AlertDialog.Builder(this).setTitle(f.dialogTitle).setView(sv).setNegativeButton("取消", null).create();
         dlg[0].show();
+    }
+
+    /** 6 位 16 进制（可以带 #）→ 0～0xFFFFFF；不是返回 -1。 */
+    private static int parseHex(String s) {
+        String t = s == null ? "" : s.trim();
+        if (t.startsWith("#")) t = t.substring(1);
+        if (t.length() != 6) return -1;
+        try {
+            return Integer.parseInt(t, 16);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
     }
 
     private static int luminance(int rgb) {
         return (((rgb >> 16) & 0xFF) * 299 + ((rgb >> 8) & 0xFF) * 587 + (rgb & 0xFF) * 114) / 1000;
     }
 
-    private void showOffset() {
-        if (tvOffset != null) tvOffset.setText("当前位置  水平 " + signed(tX) + " px　垂直 " + signed(tY) + " px　字号 " + tSize + " sp");
+    /** 在模板输入框的光标处插入 {日期} 这样的占位符（有选中的文字就替换掉）。 */
+    private void insertToken(String tok) {
+        int s = Math.max(0, etPubFmt.getSelectionStart());
+        int e = Math.max(0, etPubFmt.getSelectionEnd());
+        etPubFmt.getText().replace(Math.min(s, e), Math.max(s, e), tok);
     }
 
-    private void showPubSize() {
-        if (tvPubSize != null) tvPubSize.setText("字号 " + pSize + " sp");
-    }
-
-    private static String signed(int v) {
-        return v > 0 ? "+" + v : String.valueOf(v);
+    private void updatePubPreview() {
+        if (tvPubPreview == null || etPubFmt == null) return;
+        String s = PubFormat.render(etPubFmt.getText().toString(), PREVIEW_SEC, "广西", "南宁");
+        tvPubPreview.setText("预览：" + (s == null ? "（空，不显示）" : s));
     }
 
     // ------------------------------------------------------------ 状态卡片 / 忙碌态
