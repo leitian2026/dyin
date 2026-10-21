@@ -474,6 +474,7 @@ public class MainActivity extends Activity {
             {"comment.dtap", "双击改评论"},
             {"dtap.seen", "双击改评论：识别双击（系统方法）"},
             {"dtap.cut", "双击改评论：拦在点赞之前"},
+            {"dtap.click", "双击改评论：不让单击暂停视频"},
             {"time.progress", "视频时长：进度"},
             {"time.stop", "视频时长：停止"},
             {"time.release", "视频时长：释放"},
