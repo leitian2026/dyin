@@ -482,6 +482,7 @@ public class MainActivity extends Activity {
             {"pub.text", "发布日期地点：展开文案"},
             {"pub.bind", "发布日期地点：视频数据"},
             {"pub.anchor", "视频文案：位置 / 描边 / 改色"},
+            {"cap.draw", "视频文案：绘制时改色"},
     };
 
     /** 用 root 读抖音数据目录里的 hooks.properties（抖音进程自己写的），列出每个钩子的状态。 */
