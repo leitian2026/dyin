@@ -40,6 +40,8 @@ public final class DanmakuConfig {
     public int liveSize = 14, liveColor = 0;
     /** 位置：文字左上角在「直播页剩余空间」里的百分比，0 = 最左 / 最上，100 = 最右 / 最下（文字始终完整显示在页面里）。 */
     public int liveX = 3, liveY = 10;
+    /** 位置调节模式：设置页点「去抖音里调整」时置 true；进直播间后抖音里出现位置浮窗，点「完成 / 取消」时由抖音里的浮窗改回 false 并写回文件。设置页自己存的配置里永远是 false。 */
+    public boolean liveAdjust = false;
     /** 开播时间那一行的模板，见 LiveFormat。 */
     public String liveFormat = LiveFormat.DEFAULT;
     public static final int SIZE_MIN = 8, SIZE_MAX = 40;
@@ -71,6 +73,7 @@ public final class DanmakuConfig {
             p.setProperty("liveColor", String.valueOf(liveColor));
             p.setProperty("liveX", String.valueOf(liveX));
             p.setProperty("liveY", String.valueOf(liveY));
+            p.setProperty("liveAdjust", String.valueOf(liveAdjust));
             p.setProperty("liveFormat", liveFormat == null ? LiveFormat.DEFAULT : liveFormat);
             StringBuilder sb = new StringBuilder();
             for (String s : hiddenTabs) sb.append(sb.length() == 0 ? "" : ",").append(s);
@@ -126,6 +129,7 @@ public final class DanmakuConfig {
         c.liveColor = parseColor(p.getProperty("liveColor", "0"));
         c.liveX = parsePct(p.getProperty("liveX", "3"), 3);
         c.liveY = parsePct(p.getProperty("liveY", "10"), 10);
+        c.liveAdjust = Boolean.parseBoolean(p.getProperty("liveAdjust", "false").trim());
         String lf = p.getProperty("liveFormat", LiveFormat.DEFAULT);
         c.liveFormat = lf == null || lf.trim().isEmpty() ? LiveFormat.DEFAULT : lf;
         List<String> tabs = split(p.getProperty("hiddenTabs", ""));
