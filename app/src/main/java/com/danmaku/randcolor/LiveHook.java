@@ -1,6 +1,7 @@
 package com.danmaku.randcolor;
 
 import android.content.Context;
+import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
@@ -20,7 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import de.robv.android.xposed.XC_MethodHook;
 
 /**
- * 直播间显示开播时间：在直播间页面上叠一行文字，位置（左上角占「剩余空间」的百分比）、字号、颜色、格式都能在设置页调。
+ * 直播间显示开播时间：在直播间页面上叠一行文字，字号、颜色、格式在设置页调，位置（左上角占「剩余空间」的百分比）在抖音的直播间里用浮窗拖（见下面「位置调节」）。
  * 只在直播间页面里画：文字挂在每个直播间页面（LivePlayFragmentV2）自己的根控件的 ViewOverlay 上，页面没了文字就没了，别的界面碰不到。
  * 挂在页面自己身上还有一个好处：上下滑切直播间时，每个房间的文字跟着自己的页面走，不用判断「当前是哪个房间」。
  *
@@ -51,6 +52,10 @@ import de.robv.android.xposed.XC_MethodHook;
  *  ②页面根控件是不是 ViewGroup（不是就不显示）；叠在根控件上的文字会不会被页面里别的全屏控件盖住；
  *  ③Room 是原地填数据还是被换成新对象（换了的话靠下一次 getCreateTime 触发重新找）；
  *  ④startTime 是不是「观众看到的开播时间」——所以设置页里可以改成显示房间创建时间。
+ *
+ * 位置调节（1.24.0）：设置页不再调位置。设置页点「去抖音里调整」后配置里 liveAdjust = true，进直播间时这里照常放文字
+ * （时间还没取到 / 开关没开也放一行示例文字），并把当前在屏幕上的页面交给 LivePosPanel：它在窗口最上层盖一层触摸层和一个小浮窗，
+ * 拖动 = moveTo（改 cfg.liveX / liveY 再 placeAll），完成 / 取消 = 写回配置文件、撤掉浮窗。不加钩子，不加定时器。
  *
  * 没有定时器 / 轮询：文字只在上面的回调、回到前台、根控件尺寸变化这几个事件里更新；全量搜索每个页面最多 MAX_SCANS 次。
  * 钩子没挂上时功能安静失效，不改变抖音原有行为。
@@ -108,6 +113,7 @@ final class LiveHook {
         int scans;                            // 已做的全量搜索次数
         int lx = Integer.MIN_VALUE, ly, lw, lh;   // 上次放的位置
         int size = -1, color = Integer.MIN_VALUE; // 上次套的字号 / 颜色
+        boolean adj;                              // 文字上现在是不是带着「调节模式」的底色
 
         Page(Object frag) {
             this.frag = new WeakReference<>(frag);
@@ -188,7 +194,7 @@ final class LiveHook {
         }
     }
 
-    private static void requestRefresh() {
+    static void requestRefresh() {
         if (PENDING.compareAndSet(false, true)) MAIN.post(REFRESH);
     }
 
@@ -221,35 +227,60 @@ final class LiveHook {
     /** 回到前台（配置刚重读过）：按新的开关 / 位置 / 字号 / 颜色 / 格式重新套一遍。 */
     static void onResume() {
         try {
-            if (Looper.myLooper() != Looper.getMainLooper() || PAGES.isEmpty()) return;
+            if (Looper.myLooper() != Looper.getMainLooper()) return;
             refreshAll();
         } catch (Throwable ignored) {
         }
     }
 
     private static void refreshAll() {
-        if (PAGES.isEmpty()) return;
+        if (PAGES.isEmpty()) {
+            LivePosPanel.end();
+            return;
+        }
         DanmakuConfig c = DanmakuHook.cfg;
+        boolean adj = c.liveAdjust;
+        ViewGroup best = null;
+        int bestArea = 0;
         for (Iterator<Page> it = PAGES.iterator(); it.hasNext(); ) {
             Page pg = it.next();
             Object frag = pg.frag.get();
-            if (frag == null || rootOf(pg) == null) {
+            ViewGroup root = frag == null ? null : rootOf(pg);
+            if (root == null) {
                 dispose(pg);
                 it.remove();
                 continue;
             }
-            if (!c.liveTime) {
+            if (!c.liveTime && !adj) {
                 hide(pg);
                 continue;
             }
             long sec = timeOf(pg, frag, c.liveSrc);
             String text = sec > 0 ? LiveFormat.render(c.liveFormat, sec) : null;
+            if (text == null && adj) text = LiveFormat.render(c.liveFormat, System.currentTimeMillis() / 1000L); // 调位置时没取到时间也放一行示例
             if (text == null) {
                 hide(pg);
                 continue;
             }
             show(pg, text, c);
+            if (adj) {
+                int a = visibleArea(root);
+                if (a > bestArea) {
+                    best = root;
+                    bestArea = a;
+                }
+            }
         }
+        if (adj) LivePosPanel.sync(best);
+        else LivePosPanel.end();
+    }
+
+    private static final Rect TMP = new Rect();
+
+    /** 页面根控件在屏幕上露出来的面积；不在屏幕上 / 被隐藏返回 0。 */
+    private static int visibleArea(ViewGroup r) {
+        if (!r.isShown() || !r.getGlobalVisibleRect(TMP)) return 0;
+        return TMP.width() * TMP.height();
     }
 
     // ------------------------------------------------------------ 找 Room、读时间
@@ -421,6 +452,7 @@ final class LiveHook {
                 public void onLayoutChange(View v, int l, int tp, int r, int b, int ol, int ot, int or, int ob) {
                     try {
                         place(page);
+                        if (DanmakuHook.cfg.liveAdjust) requestRefresh(); // 调位置时页面尺寸变了，浮窗要跟着重新认
                     } catch (Throwable ignored) {
                     }
                 }
@@ -436,6 +468,10 @@ final class LiveHook {
         if (pg.color != col) {
             t.setTextColor(col);
             pg.color = col;
+        }
+        if (pg.adj != c.liveAdjust) {
+            t.setBackgroundColor(c.liveAdjust ? 0x66000000 : 0); // 调位置时给文字一块底色，看得出它有多大
+            pg.adj = c.liveAdjust;
         }
         if (!text.contentEquals(t.getText())) t.setText(text);
         if (t.getVisibility() != View.VISIBLE) t.setVisibility(View.VISIBLE);
@@ -463,6 +499,7 @@ final class LiveHook {
         pg.lx = Integer.MIN_VALUE;
         pg.size = -1;
         pg.color = Integer.MIN_VALUE;
+        pg.adj = false;
     }
 
     /**
@@ -488,6 +525,30 @@ final class LiveHook {
             pg.lh = th;
             root.invalidate();
         }
+    }
+
+    /** 位置变了（浮窗里拖动 / 微调）：每个页面上的文字重新放一遍。 */
+    static void placeAll() {
+        for (Page pg : PAGES) place(pg);
+    }
+
+    /**
+     * 浮窗里拖动：文字从 (sx%, sy%) 起跟着手指移动 (dx, dy) 像素，换算回百分比写进 cfg 再放。
+     * 位置公式是 左 = (页面宽 − 文字宽) × x%，所以手指移动 dx 像素 = 百分比变 dx / (页面宽 − 文字宽) × 100，文字正好跟手；
+     * 文字比页面还宽 / 高的那个方向不动。
+     */
+    static void moveTo(ViewGroup root, float sx, float sy, float dx, float dy) {
+        for (Page pg : PAGES) {
+            if (rootOf(pg) != root) continue;
+            TextView t = tvOf(pg);
+            if (t == null) return;
+            float rx = root.getWidth() - t.getMeasuredWidth(), ry = root.getHeight() - t.getMeasuredHeight();
+            DanmakuConfig c = DanmakuHook.cfg;
+            if (rx > 0) c.liveX = Math.max(0, Math.min(100, Math.round(sx + dx * 100f / rx)));
+            if (ry > 0) c.liveY = Math.max(0, Math.min(100, Math.round(sy + dy * 100f / ry)));
+            break;
+        }
+        placeAll();
     }
 
     private static float dp(View v, int n) {
