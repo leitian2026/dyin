@@ -570,6 +570,7 @@ final class PubHook {
             intro.addView(row, intro.indexOfChild(child) + 1);
         }
         row.setTextSize(TypedValue.COMPLEX_UNIT_SP, c.pubSize);
+        fitSpacing(row, cap);
         int color = c.pubColor != 0 ? c.pubColor : ROW_COLOR;
         if (row.getCurrentTextColor() != color) row.setTextColor(color);
         if (!line.contentEquals(row.getText())) row.setText(line);
@@ -584,6 +585,28 @@ final class PubHook {
         t.setShadowLayer(5f * d, 0f, 0f, 0xFF000000); // 和时长行的字描边一样
         t.setLayoutParams(rowLp(cap, d));
         return t;
+    }
+
+    /**
+     * 行距对齐文案：文案（抖音）把行距压得比字体默认的小。按文案「行高 ÷ 字号」的比例算出这一行该有的行高，
+     * 字体默认行高比它大的部分，从上下外边距里各减一半（外边距本来就是 −pad，抵消内边距）。
+     * 只在边距要变时才改并重新布局，已经对齐就什么都不做。
+     */
+    private static void fitSpacing(TextView row, TextView cap) {
+        try {
+            float cs = cap.getTextSize();
+            if (cs <= 0f || !(row.getLayoutParams() instanceof LinearLayout.LayoutParams)) return;
+            float want = cap.getLineHeight() * row.getTextSize() / cs;
+            int excess = Math.max(0, Math.round(row.getLineHeight() - want));
+            int m = -LineBg.pad(row.getContext()) - excess / 2;
+            LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) row.getLayoutParams();
+            if (lp.topMargin != m || lp.bottomMargin != m) {
+                lp.topMargin = m;
+                lp.bottomMargin = m;
+                row.setLayoutParams(lp);
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     /** 两行（发布信息 / 时长）共用的布局参数：左边距取文案父控件的 leftMargin。 */
@@ -732,6 +755,7 @@ final class PubHook {
             timeSzApplied = c.timeSize;
             t.setTextSize(TypedValue.COMPLEX_UNIT_SP, c.timeSize);
         }
+        fitSpacing(t, r.cap);
         int color = c.timeColor != 0 ? c.timeColor : TIME_COLOR;
         if (color != timeColApplied) {
             timeColApplied = color;
