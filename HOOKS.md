@@ -44,15 +44,15 @@ LSPosed 日志里会出现两种关键行（只在状态变成「放弃」「不
 |---|---|
 | `HookGuard.java` | 钩子编号 / id 清单、状态、停止条件、落盘、`find` / `hook` / `ok` / `miss` / `waitFail` |
 | `DanmakuHook.java` | 入口 `init(lp)`、`hookResume()`（每次回到前台的重试入口）、弹幕 `paint` 钩子（分档匹配示例） |
-| `TimeHook.java` | 时长：4 个钩子（进度 / 停止 / 释放 / 开始播放），单方法按名字匹配的示例 |
+| `TimeHook.java` | 时长进度：1 个钩子 `time.progress`（`OnUIPlayListenerDelegate#onPlayProgressChange`，单方法按名字匹配的示例），把 id / 位置 / 总时长转给 `PubHook.onProgress` |
 | `CommentHook.java` | 点赞改评论：4 个钩子——2 个混淆名（不放宽匹配的示例）+ 2 个没混淆的双击路径（`dtap.seen` 系统方法、`dtap.cut` 在拦截判断里改结果，两个都挂上才生效） |
 | `MainActivity.java` | 设置页（折叠分组 `Section`）；`HOOK_NAMES` 是「钩子 id → 中文名」，`describeHooks` 解析 `hooks.properties` |
-| `PubHook.java` | 发布日期地点常显：钩 `DmtTextView#setText(CharSequence, BufferType)`（通用控件，回调里先看开关、再比较 `this` 的类）；播放器的换视频 / 离开事件由 `TimeHook` 转进来 |
+| `PubHook.java` | 发布日期地点、视频时长、文案样式。核心钩子 `pub.bind`（`VideoViewHolder#bind(Aweme, …)` after：按运行时类型取页面根 `VideoViewHolderRootView`，往下找 `AwemeIntroInfoLayout`，容器里放空白行，发布信息 / 时长两个浮层盖在页面根上（位置全屏可调），aid → 页面登记在 `PAGES` 里给进度回调用；4 个类按名字找，缺哪个都是「类没找到」）；文案样式另外 3 个：`pub.anchor`（只找两个文案类）、`pub.text`（`DmtTextView#setText` 通用控件，回调里先看开关、再比较 `this` 的类）、`cap.draw`（`MentionTextView#onDraw`） |
 | `TabHook.java` | 首页顶部标签隐藏：类名按没混淆的 `HomeTopTabItemViewNew` 找（走 HookGuard），挂框架方法 `View.setContentDescription` 并按这个类过滤 |
 | `IdleExit.java` | 无操作自动退出：钩 `Activity.onUserInteraction`（框架方法，不走 HookGuard），记最后操作时刻；一条延时消息到点检查，够了结束进程 |
 | `LiveHook.java` | 直播间开播时间：钩 `LivePlayFragmentV2#onViewCreated`（记页面）和 `Room#getCreateTime`（触发刷新），文字叠在页面根控件的 ViewOverlay 上，位置按百分比放；格式在 `LiveFormat.java` |
 | `LivePosPanel.java` | 开播时间的位置浮窗（不是钩子）：设置页点「去抖音里调整」后配置里 `liveAdjust=true`，`LiveHook` 刷新时把屏幕上的直播页交给它，它在窗口最上层盖触摸层 + 小浮窗，拖动 / 微调 / 完成 / 取消；只在调节模式里存在，没有定时器 |
-| `VidPosPanel.java` | 发布日期地点行 / 视频时长行的位置浮窗（不是钩子）：`vidAdjust=true` 时 `PubHook.onResume` 把当前 Activity 交给它，盖触摸层 + 小浮窗，只调水平偏移 `pubDx/timeDx`；只在调节模式里存在，没有定时器 |
+| `VidPosPanel.java` | 发布日期地点行 / 视频时长行的位置浮窗（不是钩子）：`vidAdjust=true` 时 `PubHook.onResume` 把当前 Activity 交给它，盖触摸层 + 小浮窗，拖动调浮层位置 `pubX/pubY/timeX/timeY`（dp）；只在调节模式里存在，没有定时器 |
 | `RootShell.java` | `readFile(pkg, name)` 用 root 读抖音数据目录里的文件 |
 
 ## 3. 新增一个钩子：必须做的 6 步
@@ -68,7 +68,7 @@ static final int ..., FOO = 7;                       // 编号 = 它在 IDS 里�
 static final String[] IDS = {..., "foo.something"};  // 第 8 项（下标 7）
 ```
 - **常量的值必须等于它在 `IDS` 里的下标**，两处要一起改。
-- 一个 id 对应「一个会独立失效的东西」。例如 `TimeHook` 有 4 个 id，因为 4 个回调各自可能被改名；同一个方法的多个重载算 1 个 id。
+- 一个 id 对应「一个会独立失效的东西」。例如 `PubHook` 里发布信息 / 时长的 `pub.bind` 和文案样式的 `pub.text`、`pub.anchor`、`cap.draw` 是 4 个 id，因为它们各自可能失效、互不牵连；同一个方法的多个重载算 1 个 id。
 - id 是写进 `hooks.properties` 的名字，改名等于新钩子；删掉 id 后文件里的旧键下次写入时会被丢弃。
 
 ### 第 2 步：写挂钩代码
