@@ -3,6 +3,7 @@ package com.danmaku.randcolor;
 import android.content.Context;
 import android.graphics.Rect;
 import android.os.Handler;
+import android.os.SystemClock;
 import android.os.Looper;
 import android.util.TypedValue;
 import android.view.View;
@@ -68,7 +69,7 @@ final class LiveHook {
     private static final String ROOM = "com.bytedance.android.livesdkapi.depend.model.live.Room";
 
     private static final int MAX_PAGES = 6;       // 同时记住的直播间页面（上下滑时前后几个页面都在）
-    private static final int MAX_SCANS = 8;       // 每个页面最多做几次全量搜索
+    private static final int MAX_SCANS = 30;      // 每个页面最多做几次全量搜索
     private static final int MAX_DEPTH = 4, MAX_NODES = 400;
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -113,6 +114,8 @@ final class LiveHook {
         int scans;                            // 已做的全量搜索次数
         int lx = Integer.MIN_VALUE, ly, lw, lh;   // 上次放的位置
         int size = -1, color = Integer.MIN_VALUE; // 上次套的字号 / 颜色
+        boolean waiting;                          // 页面在、开关开着，但还没取到时间：页面布局一变就再试一次
+        long lastScan;                            // 上次全量搜索的时刻（节流）
         boolean adj;                              // 文字上现在是不是带着「调节模式」的底色
 
         Page(Object frag) {
@@ -255,8 +258,10 @@ final class LiveHook {
                 hide(pg);
                 continue;
             }
+            ensureListener(pg, root);
             long sec = timeOf(pg, frag, c.liveSrc);
             String text = sec > 0 ? LiveFormat.render(c.liveFormat, sec) : null;
+            pg.waiting = text == null;
             if (text == null && adj) text = LiveFormat.render(c.liveFormat, System.currentTimeMillis() / 1000L); // 调位置时没取到时间也放一行示例
             if (text == null) {
                 hide(pg);
@@ -293,8 +298,10 @@ final class LiveHook {
             st = secOf(fStart, room);
             ct = secOf(fCreate, room);
         }
-        if (st <= 0 && ct <= 0 && pg.scans < MAX_SCANS) { // 还没找到，或者找到的是还没填数据的那个
+        long now = SystemClock.uptimeMillis();
+        if (st <= 0 && ct <= 0 && pg.scans < MAX_SCANS && now - pg.lastScan >= 300) { // 还没找到，或者找到的是还没填数据的那个；两次搜索至少隔 300ms
             pg.scans++;
+            pg.lastScan = now;
             Field[] np = search(frag);
             if (np != null) {
                 pg.path = np;
@@ -446,19 +453,7 @@ final class LiveHook {
             t.setIncludeFontPadding(false);
             t.setShadowLayer(dp(root, 3), 0f, 0f, 0xFF000000); // 一圈黑边，亮背景上也看得清
             pg.tvRef = new WeakReference<>(t);
-            final Page page = pg;
-            pg.ll = new View.OnLayoutChangeListener() {
-                @Override
-                public void onLayoutChange(View v, int l, int tp, int r, int b, int ol, int ot, int or, int ob) {
-                    try {
-                        place(page);
-                        if (DanmakuHook.cfg.liveAdjust) requestRefresh(); // 调位置时页面尺寸变了，浮窗要跟着重新认
-                    } catch (Throwable ignored) {
-                    }
-                }
-            };
             root.getOverlay().add(t);
-            root.addOnLayoutChangeListener(pg.ll);
         }
         if (pg.size != c.liveSize) {
             t.setTextSize(TypedValue.COMPLEX_UNIT_SP, c.liveSize);
@@ -476,6 +471,22 @@ final class LiveHook {
         if (!text.contentEquals(t.getText())) t.setText(text);
         if (t.getVisibility() != View.VISIBLE) t.setVisibility(View.VISIBLE);
         place(pg);
+    }
+
+    /** 页面根控件的布局监听：页面尺寸变了重放文字；还没取到时间时（房间数据后到），页面布局一变就再试一次。第一次见到页面就注册，不等文字显示。 */
+    private static void ensureListener(final Page pg, ViewGroup root) {
+        if (pg.ll != null) return;
+        pg.ll = new View.OnLayoutChangeListener() {
+            @Override
+            public void onLayoutChange(View v, int l, int tp, int r, int b, int ol, int ot, int or, int ob) {
+                try {
+                    place(pg);
+                    if (pg.waiting || DanmakuHook.cfg.liveAdjust) requestRefresh();
+                } catch (Throwable ignored) {
+                }
+            }
+        };
+        root.addOnLayoutChangeListener(pg.ll);
     }
 
     private static void hide(Page pg) {
