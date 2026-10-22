@@ -651,18 +651,16 @@ final class PubHook {
             if (c instanceof LineBg.Row) {
                 if (c.getVisibility() == View.GONE) continue;
                 float t = Float.isNaN(prev) ? 0f : Math.min(0f, prev - (c.getTop() + c.getPaddingTop()));
-                float ux = 0f, uy = 0f; // 用户在位置浮窗里调的偏移（只影响这一行自己，不影响后面的行）
+                float ux = 0f; // 用户在位置浮窗里调的水平偏移（只影响这一行自己，不影响后面的行；竖直方向不调）
                 DanmakuConfig cf = DanmakuHook.cfg;
                 float d = c.getResources().getDisplayMetrics().density;
                 if (c == timeRef.get()) {
                     ux = cf.timeDx * d;
-                    uy = cf.timeDy * d;
                 } else if (rs != null && c == rs.pub) {
                     ux = cf.pubDx * d;
-                    uy = cf.pubDy * d;
                 }
                 if (c.getTranslationX() != ux) c.setTranslationX(ux);
-                if (c.getTranslationY() != t + uy) c.setTranslationY(t + uy);
+                if (c.getTranslationY() != t) c.setTranslationY(t);
                 prev = c.getBottom() - c.getPaddingBottom() + t;
                 shift = t;
                 seen = true;
