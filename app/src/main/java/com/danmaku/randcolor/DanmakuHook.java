@@ -29,7 +29,8 @@ final class DanmakuHook {
 
     static volatile DanmakuConfig cfg = new DanmakuConfig();
     private static volatile long cfgMtime = -1;
-    private static File cfgFile;
+    private static File cfgFile, posFile;
+    private static long posMtime = -1;
 
     /**
      * 上一次 paint 是不是 Stroke（说明下一次 Fill 就是弹幕的填充）。
@@ -47,6 +48,7 @@ final class DanmakuHook {
 
     static void init(XC_LoadPackage.LoadPackageParam lp) {
         cfgFile = new File(new File(lp.appInfo.dataDir, "files"), "danmaku_color.properties");
+        posFile = new File(cfgFile.getParentFile(), "dyin_pos.properties");
         HookGuard.init(lp);
         reload();
         tryInstall(lp.classLoader);
@@ -64,9 +66,16 @@ final class DanmakuHook {
     private static void reload() {
         try {
             long m = cfgFile.lastModified(); // 文件不存在返回 0
-            if (m == cfgMtime) return;
-            cfgMtime = m;
-            cfg = (m == 0) ? new DanmakuConfig() : DanmakuConfig.read(cfgFile);
+            boolean changed = m != cfgMtime;
+            if (changed) {
+                cfgMtime = m;
+                cfg = (m == 0) ? new DanmakuConfig() : DanmakuConfig.read(cfgFile);
+            }
+            long pm = posFile == null ? 0 : posFile.lastModified();
+            if (changed || pm != posMtime) { // 配置重读过（对象换了）或位置文件变了：位置文件的值盖在上面
+                posMtime = pm;
+                if (pm != 0) DanmakuConfig.applyPos(cfg, posFile);
+            }
         } catch (Throwable ignored) {
         }
     }
@@ -82,6 +91,13 @@ final class DanmakuHook {
                 o.write(cfg.toText().getBytes(StandardCharsets.ISO_8859_1));
             }
             cfgMtime = f.lastModified(); // 自己写的，不用再重读
+            File pf = posFile; // 位置单独写一个文件，设置页的推送不会冲掉它
+            if (pf != null) {
+                try (FileOutputStream o = new FileOutputStream(pf, false)) {
+                    o.write(cfg.posText().getBytes(StandardCharsets.ISO_8859_1));
+                }
+                posMtime = pf.lastModified();
+            }
         } catch (Throwable ignored) {
         }
     }
