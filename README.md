@@ -4,7 +4,7 @@
 1. **弹幕随机色**：每条弹幕随机颜色，保留黑色描边。
 2. **拦截点赞**：右侧爱心按钮 / 双击视频不再点赞，也不出双击红心。
 3. **打开评论**：上面两种操作改为打开当前视频的评论。双击这一路只走名字没混淆的 `onDoubleTap` + `MonitorScrollFrameLayout#onInterceptTouchEvent`（+ `handleSingleClick`）；1.26.4 起去掉了混淆名的 `LLLIILIL` 兜底。
-4. **视频时长常显**（1.15）：自己放一行 `00:12 / 03:45`，随播放走动。1.22.0 起它是视频文案下面的一行（有发布日期地点时在它的正下方），可以调字号和颜色；位置浮窗删了。
+4. **视频时长常显**（1.15）：自己放一行 `00:12 / 03:45`，随播放走动。1.22.0 起它是视频文案下面的一行（有发布日期地点时在它的正下方），可以调字号和颜色；1.27.0 起每个视频页自己带一个；1.28.0 起它是盖在页面上的浮层，位置全屏任意可调。
 
 5. **无操作自动退出**（1.17.8）：连续 N 分钟没有操作抖音（触摸、按键、回到前台都算操作），就结束抖音进程；后台也计时。设置页里填分钟数，0 = 关闭。
 
@@ -22,6 +22,28 @@
 
 ## 使用
 设置页的内容按功能折叠成一个个分组（点标题展开，展开一个其他自动收起；有总开关的分组不用展开就能开关）。前提：LSPosed 里启用模块、作用域勾选抖音、强杀抖音重开；改完点底部「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
+
+## 1.28.0：文案下加空白行；发布地 / 时长改成全屏任意位置
+
+- **要什么**（用户）：①用现在发布地位置的那个钩子放一个空白行，高度可调（加 1 = +2 px，减 1 = −2 px），给文案下面留出一块空位；②发布地、时长不再钩「位置」，也不再钩别的钩子，改成全屏任意位置可调。
+- **空白行**：还是 `pub.bind` 拿到的那个 `AwemeIntroInfoLayout`，在文案所在的子控件后面（原来发布信息那一行的位置）放一个纯 `View`，高度 = `blankH × 2` px（配置键 `blankH`，0 ～ 200，0 = 不放）。设置页新增「文案下方空白行」，− / + 每次 1。容器不是 `LinearLayout`（抖音改了）就不放。**没有新钩子。**
+- **发布地 / 时长**：不再放进容器，每页的页面根（`VideoViewHolderRootView`）上各盖两个文字浮层（`FrameLayout.LayoutParams`，`TOP|START`，不可点），位置用 `translationX/Y` 放，配置键 `pubX/pubY/timeX/timeY`（dp，左 / 上，−1 = 默认：左 12 dp、上 = 页面高度的 60% / 65%），夹在页面范围里。根布局变了、浮层自己布局变了、浮窗里位置变了都会重放；新增 `PubHook.reapplyPositions()`、`shownPos()`。
+- **删掉的**：行距 / 平移的全套（`closeGaps`、`fitSpacing`、`rowLp`、`watchGaps`、`topIn`，`GAP_TAG` / `SHIFT_TAG` / `ROW_TAG`），配置键 `pubDx` / `timeDx`（旧文件里残留的读取时忽略，位置回到默认）。钩子数量没变（`pub.bind`、`time.progress`、`pub.text`、`pub.anchor`、`cap.draw`），`RULES_REV` 没动。
+- **位置浮窗**（`VidPosPanel`）：现在水平竖直都能拖，◀ ▶ ▲ ▼ 微调 1 dp，「归零」回默认，取消 / 完成不变；配置里是默认（−1）时先取屏幕上现在的位置再动。
+- **没有证据 / 没验证的**：①页面根按 `FrameLayout` 往里加（视图树里子控件都是 gravity 17 叠在原点，像 `FrameLayout`），根要是别的布局，浮层位置会不对；②浮层加在根的最后一个，抖音以后往根里再加控件，浮层可能被盖住；③上面两项和「容器是根的后代」一样，没上机；④浮层宽度最多是根的宽度，位置靠右时文字会被夹回来而不是换行。
+- **双击缩放后误点赞**：这次没动。原因没有证据，等 TextRec 抓到再改。
+- 没上机；只用最小的 Android 桩类对 `PubHook` / `TimeHook` / `HookGuard` / `DanmakuConfig` 做过类型检查，`MainActivity` / `VidPosPanel` 没编译。
+
+## 1.27.0：发布信息 / 时长重做——每个视频页自己带着自己的行
+
+- **问题**：以前没有任何一个钩子能直接说出「这个 Aweme 对应哪个容器」，只能靠补丁绕：文案文字对 `desc`（`pub.text`）、播放器事件猜当前视频（`time.playing` / `time.stop` / `time.release`）、屏幕上扫容器（`locateCurrent`、`pub.row`）、1 秒忽略旧进度（`STALE_MS`）、读抖音自己那一行（`nativeLine`）。越补越多，还靠「所有页面偏移要一致」之类的特例。
+- **做法**：核心只有一个钩子 `pub.bind`（`VideoViewHolder#bind(Aweme, …)` 的 after）。`this` 是这一页的 holder，参数是这一页的视频：按类型取页面根 `VideoViewHolderRootView`（holder 里值是它的那个字段；字段名 `k0` 是混淆的，不认名字），往下找 `AwemeIntroInfoLayout`，把发布信息行和时长行直接放进去，数据写在这一页自己身上。时长只再要一个 `time.progress`：进度回调的 id 就是 `Aweme.aid`，按 id 找页面更新。
+- **删掉的**：钩子 `time.stop`、`time.release`、`time.playing`、`pub.row`；`desc` 文字对比（`sameStart` 一整套）、`locateCurrent`、`STALE_MS`、`nativeLine`、`curId` / `curDesc` / `DESCS`、`TimeHook` 里的「当前视频」状态。`HookGuard` 的编号和 `IDS` 同步缩成 13 项，`RULES_REV` 加一。
+- **文案样式**（描边 / 改色 / 灰色底）仍是 `pub.text`、`pub.anchor`、`cap.draw` 三个钩子，只共用页面容器：文案控件靠「在 `AwemeIntroInfoLayout` 里面」认，不再靠文字对 `desc`；bind 时给这一页的文案设一次样式，回到前台给所有见过的页面重设。
+- **依据**（TextRec 40.7.0，`textrec-tasks-20261022-160215` / `160556` / `160823`）：①抖音竖滑是 `VerticalViewPager` + `PagerAdapter`，不是 RecyclerView，holder 没有 `itemView`；②页面根 `VideoViewHolderRootView` 常驻 2～3 页、划动时复用，`AwemeIntroInfoLayout` 在它下面 4 层；③holder 里值是页面根的字段，快照里 `mID=2131416270`、11 个子控件，和视图树一致，同一个字段在 `PlayletVideoViewHolder` 和 `ForwardFeedReversionVideoViewHolder` 上都能取到；④容器在预加载线程里先建好，`bind` 在它挂窗口之前（+1365 → +1384），`bind` 返回时根的 `mMeasuredWidth` 和 `mWindowAttachCount` 都是 0。
+- **没有证据的部分**：①「容器在 `bind` 时已经是根的后代」没有直接抓到，所以 `bind` 里找不到容器时不放弃，页面登记着，第一个进度回调再找一次（不多挂 `onAttachedToWindow` 钩子）；②`Aweme.duration` 按毫秒用（快照里 17857），只用来先显示「00:00 / 总时长」，第一个进度回调会用它自己的总时长覆盖；③按运行时类型找根字段是我的做法，没上机验证；找不到时发布信息、时长安静失效，抖音原来的界面不变。
+- **顺带修的**：旧版里行距监听的 tag（`GAP_TAG`）和行数据的 tag（`ROW_TAG`）是同一个值 `0x7e0b0c02`，容器上有行数据时行距监听挂不上；现在每个 tag 用不同的值。位置浮窗调偏移改成对每一页自己的两行生效（时长行现在每页一个）。
+- 没上机、没用真正的 Android 编译；只用最小的 Android 桩类对 `PubHook` / `TimeHook` / `HookGuard` 做过类型检查。
 
 ## 1.26.4：去掉双击的混淆名兜底钩子
 
@@ -333,9 +355,9 @@
 - 如果双击后还是点赞了或出了红心，说明还有别的入口，把现象告诉我；1.11.1 是旧方案，可以回退。
 
 ## 抖音版本相关（换版本后可能要改）
-- `TimeHook.DELEGATE` / `PROGRESS`：时长显示用到的播放器监听层类名和进度回调名。
+- `TimeHook.DELEGATE` / `PROGRESS`：时长进度用到的播放器监听层类名和进度回调名（`time.progress`）。
 - `CommentHook.DIGG_CLICK_METHOD`（`LJJJJJL`）：爱心按钮点击入口。
 - `BaseListFragmentPanel#LLLIILIL(MotionEvent)`：双击的统一入口（红心和点赞都在它下面）。
 - 评论按钮靠 contentDescription「评论N，按钮」查找。
-- `PubHook.HOLDER` / `PubHook.AWEME`：发布日期地点（`pub.bind`）用到的 `VideoViewHolder#bind(Aweme…)` 和 `Aweme` 的 `aid` / `createTime` / `ipAttribution` / `city` 字段名；`PubHook.CITIES` 是行政区划代码表。
-- `PubHook.DMT` / `PubHook.MENTION`：发布日期地点用到的文字控件类名（`DmtTextView#setText(CharSequence, BufferType)`、`MentionTextView`），以及文案结尾「4 个空格 + 日期 + 空格 + 地点」的格式。
+- `PubHook.HOLDER` / `AWEME` / `ROOT` / `INTRO`：发布日期地点、视频时长（`pub.bind`）用到的 `VideoViewHolder#bind(Aweme…)`、`Aweme` 的 `aid` / `createTime` / `ipAttribution` / `city` / `duration` 字段名、页面根 `VideoViewHolderRootView`、容器 `AwemeIntroInfoLayout`；`PubHook.CITIES` 是行政区划代码表。
+- `PubHook.DMT` / `MENTION` / `CAPTION`：文案样式用到的文字控件类名（`DmtTextView#setText(CharSequence, BufferType)`、`MentionTextView`、`ScrollMentionTextView`，`pub.text` / `pub.anchor` / `cap.draw`）。
