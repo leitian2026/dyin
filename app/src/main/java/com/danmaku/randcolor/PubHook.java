@@ -581,7 +581,7 @@ final class PubHook {
     private static TextView newRow(TextView cap) {
         TextView t = new LineBg.Row(cap.getContext());
         float d = t.getResources().getDisplayMetrics().density;
-        t.setShadowLayer(3f * d, 0f, 0f, 0xFF000000);
+        t.setShadowLayer(5f * d, 0f, 0f, 0xFF000000); // 和时长行的字描边一样
         t.setLayoutParams(rowLp(cap, d));
         return t;
     }
@@ -596,8 +596,9 @@ final class PubHook {
         }
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.leftMargin = (left > 0 ? left : Math.round(12f * d)) - LineBg.pad(cap.getContext()); // 减掉行自己的内边距，字和文案对齐
-        lp.topMargin = Math.round(2f * d);
-        lp.bottomMargin = Math.round(4f * d);
+        int pad = LineBg.pad(cap.getContext());
+        lp.topMargin = -pad; // 行自己有 pad 的内边距（给灰色底留地方），用负边距抵消：行与行之间的间距 = 文字本身的行距
+        lp.bottomMargin = -pad;
         return lp;
     }
 
