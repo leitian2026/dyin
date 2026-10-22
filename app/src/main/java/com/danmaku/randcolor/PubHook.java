@@ -170,7 +170,13 @@ final class PubHook {
         public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
             try {
                 Object o = v.getTag(ROOT_TAG);
-                if (o instanceof Rows) placeAll((Rows) o);
+                if (o instanceof Rows) {
+                    Rows rs = (Rows) o;
+                    placeAll(rs);
+                    // bind 时容器还没挂进根里：根布局时（容器这时一般已经在了）补找一次，空白行和文案样式不用等第一个进度回调
+                    DanmakuConfig c = DanmakuHook.cfg;
+                    if (rs.intro == null && rs.aid != null && (c.blankH > 0 || styleOn()) && ensureIntro(rs)) applyAll(rs);
+                }
             } catch (Throwable ignored) {
             }
         }
@@ -350,7 +356,7 @@ final class PubHook {
             try {
                 if (!isMain() || p.thisObject == null || p.args == null || p.args.length == 0 || p.args[0] == null) return;
                 DanmakuConfig c = DanmakuHook.cfg;
-                if (!c.pubAlways && !c.timeAlways && !styleOn()) return; // 全关着：回到前台时已经把现有的行藏起来了
+                if (!c.pubAlways && !c.timeAlways && !styleOn() && c.blankH <= 0) return; // 全关着（空白行也是 0）：回到前台时已经把现有的行藏起来了
                 Field fa = fAid;
                 if (fa == null || fTime == null) return;
                 Object o = fa.get(p.args[0]);
