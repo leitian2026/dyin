@@ -44,6 +44,10 @@ public final class DanmakuConfig {
     public boolean liveAdjust = false;
     /** 视频文案 / 视频时长 / 发布日期地点每一行字后面的灰色底的不透明度（0～100，%）；0 = 不画。见 LineBg。 */
     public int lineBg = 40;
+    /** 发布日期地点行、视频时长行的位置偏移（dp，叠加在自动贴紧上一行的位置上；右 / 下为正）。在抖音里用位置浮窗调，见 VidPosPanel。 */
+    public int pubDx = 0, pubDy = 0, timeDx = 0, timeDy = 0;
+    /** 位置调节模式（发布地 / 时长）：设置页点「去抖音里调整」时置 true，抖音里浮窗点完成 / 取消时改回 false。设置页自己存的配置里永远是 false。 */
+    public boolean vidAdjust = false;
     /** 开播时间那一行的模板，见 LiveFormat。 */
     public String liveFormat = LiveFormat.DEFAULT;
     public static final int SIZE_MIN = 8, SIZE_MAX = 40;
@@ -77,6 +81,11 @@ public final class DanmakuConfig {
             p.setProperty("liveY", String.valueOf(liveY));
             p.setProperty("liveAdjust", String.valueOf(liveAdjust));
             p.setProperty("lineBg", String.valueOf(lineBg));
+            p.setProperty("pubDx", String.valueOf(pubDx));
+            p.setProperty("pubDy", String.valueOf(pubDy));
+            p.setProperty("timeDx", String.valueOf(timeDx));
+            p.setProperty("timeDy", String.valueOf(timeDy));
+            p.setProperty("vidAdjust", String.valueOf(vidAdjust));
             p.setProperty("liveFormat", liveFormat == null ? LiveFormat.DEFAULT : liveFormat);
             StringBuilder sb = new StringBuilder();
             for (String s : hiddenTabs) sb.append(sb.length() == 0 ? "" : ",").append(s);
@@ -133,6 +142,11 @@ public final class DanmakuConfig {
         c.liveX = parsePct(p.getProperty("liveX", "3"), 3);
         c.liveY = parsePct(p.getProperty("liveY", "10"), 10);
         c.lineBg = parsePct(p.getProperty("lineBg", "40"), 40);
+        c.pubDx = parseOff(p.getProperty("pubDx", "0"));
+        c.pubDy = parseOff(p.getProperty("pubDy", "0"));
+        c.timeDx = parseOff(p.getProperty("timeDx", "0"));
+        c.timeDy = parseOff(p.getProperty("timeDy", "0"));
+        c.vidAdjust = Boolean.parseBoolean(p.getProperty("vidAdjust", "false").trim());
         c.liveAdjust = Boolean.parseBoolean(p.getProperty("liveAdjust", "false").trim());
         String lf = p.getProperty("liveFormat", LiveFormat.DEFAULT);
         c.liveFormat = lf == null || lf.trim().isEmpty() ? LiveFormat.DEFAULT : lf;
@@ -155,6 +169,15 @@ public final class DanmakuConfig {
             return Math.max(SIZE_MIN, Math.min(SIZE_MAX, Integer.parseInt(v.trim())));
         } catch (Throwable t) {
             return def;
+        }
+    }
+
+    /** 位置偏移（dp）：-400～400；读不懂当 0。 */
+    private static int parseOff(String v) {
+        try {
+            return Math.max(-400, Math.min(400, Integer.parseInt(v.trim())));
+        } catch (Throwable t) {
+            return 0;
         }
     }
 
