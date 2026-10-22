@@ -98,6 +98,56 @@ public final class DanmakuConfig {
         }
     }
 
+    /**
+     * 位置（直播间开播时间的百分比、发布地 / 时长的偏移）单独存在抖音自己数据目录里的 dyin_pos.properties：
+     * 位置浮窗只写它，设置页的「保存并应用」不碰它（以前位置跟着配置文件走，设置页里的旧值会把抖音里调好的位置冲掉）。
+     * 有这个文件时，它的值盖过配置文件里的同名项。
+     */
+    String posText() {
+        try {
+            Properties p = new Properties();
+            p.setProperty("liveX", String.valueOf(liveX));
+            p.setProperty("liveY", String.valueOf(liveY));
+            p.setProperty("pubDx", String.valueOf(pubDx));
+            p.setProperty("pubDy", String.valueOf(pubDy));
+            p.setProperty("timeDx", String.valueOf(timeDx));
+            p.setProperty("timeDy", String.valueOf(timeDy));
+            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+            p.store(bo, null);
+            return new String(bo.toByteArray(), StandardCharsets.ISO_8859_1);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    static void applyPos(DanmakuConfig c, Properties p) {
+        c.liveX = parsePct(p.getProperty("liveX", String.valueOf(c.liveX)), c.liveX);
+        c.liveY = parsePct(p.getProperty("liveY", String.valueOf(c.liveY)), c.liveY);
+        c.pubDx = parseOff(p.getProperty("pubDx", String.valueOf(c.pubDx)));
+        c.pubDy = parseOff(p.getProperty("pubDy", String.valueOf(c.pubDy)));
+        c.timeDx = parseOff(p.getProperty("timeDx", String.valueOf(c.timeDx)));
+        c.timeDy = parseOff(p.getProperty("timeDy", String.valueOf(c.timeDy)));
+    }
+
+    static void applyPos(DanmakuConfig c, File f) {
+        try (FileInputStream in = new FileInputStream(f)) {
+            Properties p = new Properties();
+            p.load(in);
+            applyPos(c, p);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 设置页用：把 root 读回的 dyin_pos.properties 文本盖到 c 上。 */
+    static void applyPosText(DanmakuConfig c, String text) {
+        try {
+            Properties p = new Properties();
+            p.load(new StringReader(text));
+            applyPos(c, p);
+        } catch (Throwable ignored) {
+        }
+    }
+
     public static DanmakuConfig fromText(String text) {
         DanmakuConfig c = new DanmakuConfig();
         if (text == null || text.isEmpty()) return c;
