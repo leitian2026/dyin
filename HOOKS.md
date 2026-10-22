@@ -46,11 +46,12 @@ LSPosed 日志里会出现两种关键行（只在状态变成「放弃」「不
 | `DanmakuHook.java` | 入口 `init(lp)`、`hookResume()`（每次回到前台的重试入口）、弹幕 `paint` 钩子（分档匹配示例） |
 | `TimeHook.java` | 时长：4 个钩子（进度 / 停止 / 释放 / 开始播放），单方法按名字匹配的示例 |
 | `CommentHook.java` | 点赞改评论：4 个钩子——2 个混淆名（不放宽匹配的示例）+ 2 个没混淆的双击路径（`dtap.seen` 系统方法、`dtap.cut` 在拦截判断里改结果，两个都挂上才生效） |
-| `MainActivity.java` | 设置页；`HOOK_NAMES` 是「钩子 id → 中文名」，`describeHooks` 解析 `hooks.properties` |
+| `MainActivity.java` | 设置页（折叠分组 `Section`）；`HOOK_NAMES` 是「钩子 id → 中文名」，`describeHooks` 解析 `hooks.properties` |
 | `PubHook.java` | 发布日期地点常显：钩 `DmtTextView#setText(CharSequence, BufferType)`（通用控件，回调里先看开关、再比较 `this` 的类）；播放器的换视频 / 离开事件由 `TimeHook` 转进来 |
 | `TabHook.java` | 首页顶部标签隐藏：类名按没混淆的 `HomeTopTabItemViewNew` 找（走 HookGuard），挂框架方法 `View.setContentDescription` 并按这个类过滤 |
 | `IdleExit.java` | 无操作自动退出：钩 `Activity.onUserInteraction`（框架方法，不走 HookGuard），记最后操作时刻；一条延时消息到点检查，够了结束进程 |
 | `LiveHook.java` | 直播间开播时间：钩 `LivePlayFragmentV2#onViewCreated`（记页面）和 `Room#getCreateTime`（触发刷新），文字叠在页面根控件的 ViewOverlay 上，位置按百分比放；格式在 `LiveFormat.java` |
+| `LivePosPanel.java` | 开播时间的位置浮窗（不是钩子）：设置页点「去抖音里调整」后配置里 `liveAdjust=true`，`LiveHook` 刷新时把屏幕上的直播页交给它，它在窗口最上层盖触摸层 + 小浮窗，拖动 / 微调 / 完成 / 取消；只在调节模式里存在，没有定时器 |
 | `RootShell.java` | `readFile(pkg, name)` 用 root 读抖音数据目录里的文件 |
 
 ## 3. 新增一个钩子：必须做的 6 步
