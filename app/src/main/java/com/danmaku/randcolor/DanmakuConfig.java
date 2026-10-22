@@ -44,8 +44,10 @@ public final class DanmakuConfig {
     public boolean liveAdjust = false;
     /** 视频文案 / 视频时长 / 发布日期地点每一行字后面的灰色底的不透明度（0～100，%）；0 = 不画。见 LineBg。 */
     public int lineBg = 40;
-    /** 发布日期地点行、视频时长行的水平偏移（dp，右为正；竖直方向不调，自动贴紧上一行）。在抖音里用位置浮窗调，见 VidPosPanel。 */
-    public int pubDx = 0, timeDx = 0;
+    /** 文案下面的空白行高度：每 1 = 2 像素（0 = 不放，最大 200）。 */
+    public int blankH = 0;
+    /** 发布日期地点、视频时长两个浮层在页面里的位置（左 / 上，dp，0 ～ 4000）；-1 = 默认。在抖音里用位置浮窗拖，见 VidPosPanel。 */
+    public int pubX = -1, pubY = -1, timeX = -1, timeY = -1;
     /** 位置调节模式（发布地 / 时长）：设置页点「去抖音里调整」时置 true，抖音里浮窗点完成 / 取消时改回 false。设置页自己存的配置里永远是 false。 */
     public boolean vidAdjust = false;
     /** 开播时间那一行的模板，见 LiveFormat。 */
@@ -81,8 +83,11 @@ public final class DanmakuConfig {
             p.setProperty("liveY", String.valueOf(liveY));
             p.setProperty("liveAdjust", String.valueOf(liveAdjust));
             p.setProperty("lineBg", String.valueOf(lineBg));
-            p.setProperty("pubDx", String.valueOf(pubDx));
-            p.setProperty("timeDx", String.valueOf(timeDx));
+            p.setProperty("blankH", String.valueOf(blankH));
+            p.setProperty("pubX", String.valueOf(pubX));
+            p.setProperty("pubY", String.valueOf(pubY));
+            p.setProperty("timeX", String.valueOf(timeX));
+            p.setProperty("timeY", String.valueOf(timeY));
             p.setProperty("vidAdjust", String.valueOf(vidAdjust));
             p.setProperty("liveFormat", liveFormat == null ? LiveFormat.DEFAULT : liveFormat);
             StringBuilder sb = new StringBuilder();
@@ -106,8 +111,10 @@ public final class DanmakuConfig {
             Properties p = new Properties();
             p.setProperty("liveX", String.valueOf(liveX));
             p.setProperty("liveY", String.valueOf(liveY));
-            p.setProperty("pubDx", String.valueOf(pubDx));
-            p.setProperty("timeDx", String.valueOf(timeDx));
+            p.setProperty("pubX", String.valueOf(pubX));
+            p.setProperty("pubY", String.valueOf(pubY));
+            p.setProperty("timeX", String.valueOf(timeX));
+            p.setProperty("timeY", String.valueOf(timeY));
             ByteArrayOutputStream bo = new ByteArrayOutputStream();
             p.store(bo, null);
             return new String(bo.toByteArray(), StandardCharsets.ISO_8859_1);
@@ -119,8 +126,10 @@ public final class DanmakuConfig {
     static void applyPos(DanmakuConfig c, Properties p) {
         c.liveX = parsePct(p.getProperty("liveX", String.valueOf(c.liveX)), c.liveX);
         c.liveY = parsePct(p.getProperty("liveY", String.valueOf(c.liveY)), c.liveY);
-        c.pubDx = parseOff(p.getProperty("pubDx", String.valueOf(c.pubDx)));
-        c.timeDx = parseOff(p.getProperty("timeDx", String.valueOf(c.timeDx)));
+        c.pubX = parsePos(p.getProperty("pubX", String.valueOf(c.pubX)));
+        c.pubY = parsePos(p.getProperty("pubY", String.valueOf(c.pubY)));
+        c.timeX = parsePos(p.getProperty("timeX", String.valueOf(c.timeX)));
+        c.timeY = parsePos(p.getProperty("timeY", String.valueOf(c.timeY)));
     }
 
     static void applyPos(DanmakuConfig c, File f) {
@@ -186,8 +195,11 @@ public final class DanmakuConfig {
         c.liveX = parsePct(p.getProperty("liveX", "3"), 3);
         c.liveY = parsePct(p.getProperty("liveY", "10"), 10);
         c.lineBg = parsePct(p.getProperty("lineBg", "40"), 40);
-        c.pubDx = parseOff(p.getProperty("pubDx", "0"));
-        c.timeDx = parseOff(p.getProperty("timeDx", "0"));
+        c.blankH = Math.max(0, Math.min(200, parseIntOr(p.getProperty("blankH", "0"), 0)));
+        c.pubX = parsePos(p.getProperty("pubX", "-1"));
+        c.pubY = parsePos(p.getProperty("pubY", "-1"));
+        c.timeX = parsePos(p.getProperty("timeX", "-1"));
+        c.timeY = parsePos(p.getProperty("timeY", "-1"));
         c.vidAdjust = Boolean.parseBoolean(p.getProperty("vidAdjust", "false").trim());
         c.liveAdjust = Boolean.parseBoolean(p.getProperty("liveAdjust", "false").trim());
         String lf = p.getProperty("liveFormat", LiveFormat.DEFAULT);
@@ -215,11 +227,20 @@ public final class DanmakuConfig {
     }
 
     /** 位置偏移（dp）：-400～400；读不懂当 0。 */
-    private static int parseOff(String v) {
+    /** 浮层位置（dp）：-1 = 默认；读不懂当默认。 */
+    private static int parsePos(String v) {
         try {
-            return Math.max(-400, Math.min(400, Integer.parseInt(v.trim())));
+            return Math.max(-1, Math.min(4000, Integer.parseInt(v.trim())));
         } catch (Throwable t) {
-            return 0;
+            return -1;
+        }
+    }
+
+    private static int parseIntOr(String v, int def) {
+        try {
+            return Integer.parseInt(v.trim());
+        } catch (Throwable t) {
+            return def;
         }
     }
 
