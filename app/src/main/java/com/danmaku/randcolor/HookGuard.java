@@ -30,11 +30,11 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 final class HookGuard {
     private HookGuard() {}
 
-    static final int PAINT = 0, TIME_PROGRESS = 1, TIME_STOP = 2, TIME_RELEASE = 3, TIME_PLAYING = 4, DIGG = 5, TAB = 6, PUB = 7, PUB_BIND = 8, PUB_ANCHOR = 9, DTAP_SEEN = 10, DTAP_CUT = 11, CAP_DRAW = 12, DTAP_CLICK = 13, PUB_ROW = 14, LIVE_PAGE = 15, LIVE_ROOM = 16;
-    static final String[] IDS = {"paint", "time.progress", "time.stop", "time.release", "time.playing", "comment.digg", "tab.hide", "pub.text", "pub.bind", "pub.anchor", "dtap.seen", "dtap.cut", "cap.draw", "dtap.click", "pub.row", "live.page", "live.room"};
+    static final int PAINT = 0, TIME_PROGRESS = 1, DIGG = 2, TAB = 3, PUB = 4, PUB_BIND = 5, PUB_ANCHOR = 6, DTAP_SEEN = 7, DTAP_CUT = 8, CAP_DRAW = 9, DTAP_CLICK = 10, LIVE_PAGE = 11, LIVE_ROOM = 12;
+    static final String[] IDS = {"paint", "time.progress", "comment.digg", "tab.hide", "pub.text", "pub.bind", "pub.anchor", "dtap.seen", "dtap.cut", "cap.draw", "dtap.click", "live.page", "live.room"};
 
     /** 匹配规则改了就加一：已经放弃的钩子会重新试一次。 */
-    private static final int RULES_REV = 1;
+    private static final int RULES_REV = 2;
     /** 类一直找不到时，最多试几次（每次回到前台一次）。 */
     private static final int MAX_WAIT = 6;
 
