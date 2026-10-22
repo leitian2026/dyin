@@ -17,8 +17,9 @@ import java.lang.ref.WeakReference;
 /**
  * 发布日期地点行、视频时长行的「位置浮窗」（1.26.0）：设置页点「去抖音里调整」→ 配置里 vidAdjust = true → 抖音回到前台时
  * PubHook.onResume 把当前 Activity 交给 {@link #show}：在窗口最上层盖一层半透明触摸层 + 一个小浮窗。
- *  - 浮窗里先选「发布地」或「时长」，再在屏幕任意位置按住拖动：所选的那一行跟着手指走（偏移量，单位 dp，叠加在自动贴紧上一行的位置上）；
- *  - ◀ ▶ ▲ ▼ 微调 1 dp，「归零」把所选行的偏移清零，「取消」回到打开时的偏移，「完成」保存；浮窗标题可以拖。
+ *  - 浮窗里先选「发布地」或「时长」，再在屏幕任意位置按住左右拖动：所选的那一行跟着手指水平走（偏移量，单位 dp）。
+ *    只能左右调，竖直方向不动（1.26.2 起；竖直位置由 PubHook.closeGaps 自动贴紧上一行）；
+ *  - ◀ ▶ 微调 1 dp，「归零」把所选行的偏移清零，「取消」回到打开时的偏移，「完成」保存；浮窗标题可以拖。
  * 完成 / 取消把 vidAdjust 改回 false 并写回抖音自己的配置文件；设置页回到前台时用 root 读回新偏移。
  * 不是钩子，没有定时器；触摸层只在调节模式里存在。对应的开关（发布日期地点 / 视频时长）要先打开，那一行才看得到。
  */
@@ -28,9 +29,9 @@ final class VidPosPanel {
     private static WeakReference<FrameLayout> layerRef;
     private static TextView tvPos, btnPub, btnTime;
     private static int target; // 0 = 发布地  1 = 时长
-    private static int o0, o1, o2, o3; // 打开时的 pubDx, pubDy, timeDx, timeDy（「取消」回到这里）
+    private static int o0, o2; // 打开时的 pubDx, timeDx（「取消」回到这里）
     private static boolean opened;
-    private static float downX, downY, startX, startY;
+    private static float downX, startX;
     private static float pdX, pdY, ptX, ptY;
     private static final int LIM = 400;
     private static final int DARK = 0xF0171A22, BTN = 0xFF2B303C, PRIMARY = 0xFF3B5BDB;
@@ -48,9 +49,7 @@ final class VidPosPanel {
         if (!opened) {
             DanmakuConfig c = DanmakuHook.cfg;
             o0 = c.pubDx;
-            o1 = c.pubDy;
             o2 = c.timeDx;
-            o3 = c.timeDy;
             opened = true;
         }
         layer = build(decor.getContext());
@@ -73,21 +72,16 @@ final class VidPosPanel {
 
     // ------------------------------------------------------------ 动作
 
-    private static int get(int axis) {
+    private static int get() {
         DanmakuConfig c = DanmakuHook.cfg;
-        return target == 0 ? (axis == 0 ? c.pubDx : c.pubDy) : (axis == 0 ? c.timeDx : c.timeDy);
+        return target == 0 ? c.pubDx : c.timeDx;
     }
 
-    private static void put(int axis, int v) {
+    private static void put(int v) {
         DanmakuConfig c = DanmakuHook.cfg;
         v = Math.max(-LIM, Math.min(LIM, v));
-        if (target == 0) {
-            if (axis == 0) c.pubDx = v;
-            else c.pubDy = v;
-        } else {
-            if (axis == 0) c.timeDx = v;
-            else c.timeDy = v;
-        }
+        if (target == 0) c.pubDx = v;
+        else c.timeDx = v;
     }
 
     private static void changed() {
@@ -99,9 +93,7 @@ final class VidPosPanel {
         DanmakuConfig c = DanmakuHook.cfg;
         if (!keep) {
             c.pubDx = o0;
-            c.pubDy = o1;
             c.timeDx = o2;
-            c.timeDy = o3;
         }
         c.vidAdjust = false;
         DanmakuHook.saveCfg();
@@ -109,15 +101,13 @@ final class VidPosPanel {
         PubHook.reapplyOffsets();
     }
 
-    private static void nudge(int dx, int dy) {
-        put(0, get(0) + dx);
-        put(1, get(1) + dy);
+    private static void nudge(int dx) {
+        put(get() + dx);
         changed();
     }
 
     private static void zero() {
-        put(0, 0);
-        put(1, 0);
+        put(0);
         changed();
     }
 
@@ -128,7 +118,7 @@ final class VidPosPanel {
 
     private static void refresh() {
         if (tvPos != null) {
-            String s = (target == 0 ? "发布地" : "时长") + "  水平 " + get(0) + "  垂直 " + get(1) + " dp";
+            String s = (target == 0 ? "发布地" : "时长") + "  水平 " + get() + " dp";
             if (!s.contentEquals(tvPos.getText())) tvPos.setText(s);
         }
         paint(btnPub, target == 0);
@@ -148,13 +138,10 @@ final class VidPosPanel {
                 int a = e.getActionMasked();
                 if (a == MotionEvent.ACTION_DOWN) {
                     downX = e.getRawX();
-                    downY = e.getRawY();
-                    startX = get(0);
-                    startY = get(1);
+                    startX = get();
                 } else if (a == MotionEvent.ACTION_MOVE) {
                     float d = v.getResources().getDisplayMetrics().density;
-                    put(0, Math.round(startX + (e.getRawX() - downX) / d));
-                    put(1, Math.round(startY + (e.getRawY() - downY) / d));
+                    put(Math.round(startX + (e.getRawX() - downX) / d));
                     changed();
                 }
             } catch (Throwable ignored) {
@@ -220,7 +207,7 @@ final class VidPosPanel {
         pos.setPadding(0, dp(ctx, 8), 0, 0);
         tvPos = pos;
         panel.addView(pos);
-        TextView hint = label(ctx, "选好上面的一项，在屏幕任意位置拖动", 12, 0xFF9AA1B2, false);
+        TextView hint = label(ctx, "选好上面的一项，在屏幕上左右拖动（只能左右）", 12, 0xFF9AA1B2, false);
         hint.setPadding(0, dp(ctx, 2), 0, dp(ctx, 8));
         panel.addView(hint);
 
@@ -228,22 +215,12 @@ final class VidPosPanel {
         nudge.setOrientation(LinearLayout.HORIZONTAL);
         nudge.addView(button(ctx, "◀", BTN, new Runnable() {
             public void run() {
-                nudge(-1, 0);
+                nudge(-1);
             }
         }), lp(ctx, false));
         nudge.addView(button(ctx, "▶", BTN, new Runnable() {
             public void run() {
-                nudge(1, 0);
-            }
-        }), lp(ctx, true));
-        nudge.addView(button(ctx, "▲", BTN, new Runnable() {
-            public void run() {
-                nudge(0, -1);
-            }
-        }), lp(ctx, true));
-        nudge.addView(button(ctx, "▼", BTN, new Runnable() {
-            public void run() {
-                nudge(0, 1);
+                nudge(1);
             }
         }), lp(ctx, true));
         panel.addView(nudge, new LinearLayout.LayoutParams(-1, -2));
