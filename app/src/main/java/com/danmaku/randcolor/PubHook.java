@@ -299,11 +299,15 @@ final class PubHook {
         protected void beforeHookedMethod(MethodHookParam p) {
             drawSwapped = false;
             try {
+                Object self = p.thisObject;
+                if (!(self instanceof TextView) || ((View) self).getTag(CAP_TAG) == null) return;
+                int bg = DanmakuHook.cfg.lineBg;
+                if (bg > 0 && p.args != null && p.args.length > 0 && p.args[0] instanceof android.graphics.Canvas) {
+                    LineBg.draw((android.graphics.Canvas) p.args[0], (TextView) self, bg); // 文字灰色底：画在字之前
+                }
                 int want = DanmakuHook.cfg.capColor;
                 Field f = fCurColor;
-                Object self = p.thisObject;
-                if (want == 0 || f == null || !(self instanceof TextView)) return;
-                if (((View) self).getTag(CAP_TAG) == null) return;
+                if (want == 0 || f == null) return;
                 int old = f.getInt(self);
                 if (old == want) return;
                 drawSaved = old;
@@ -570,11 +574,12 @@ final class PubHook {
         if (row.getCurrentTextColor() != color) row.setTextColor(color);
         if (!line.contentEquals(row.getText())) row.setText(line);
         if (row.getVisibility() != View.VISIBLE) row.setVisibility(View.VISIBLE);
+        row.invalidate(); // 灰色底透明度可能变了
     }
 
     /** 新建发布信息这一行：一圈黑边；左边距和文案对齐，宽度按文字、放不下就换行，不截断。 */
     private static TextView newRow(TextView cap) {
-        TextView t = new TextView(cap.getContext());
+        TextView t = new LineBg.Row(cap.getContext());
         float d = t.getResources().getDisplayMetrics().density;
         t.setShadowLayer(3f * d, 0f, 0f, 0xFF000000);
         t.setLayoutParams(rowLp(cap, d));
@@ -590,7 +595,7 @@ final class PubHook {
             if (lp instanceof ViewGroup.MarginLayoutParams) left = ((ViewGroup.MarginLayoutParams) lp).leftMargin;
         }
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.leftMargin = left > 0 ? left : Math.round(12f * d);
+        lp.leftMargin = (left > 0 ? left : Math.round(12f * d)) - LineBg.pad(cap.getContext()); // 减掉行自己的内边距，字和文案对齐
         lp.topMargin = Math.round(2f * d);
         lp.bottomMargin = Math.round(4f * d);
         return lp;
@@ -695,7 +700,7 @@ final class PubHook {
             t = null;
         }
         if (t == null) {
-            t = new TextView(intro.getContext());
+            t = new LineBg.Row(intro.getContext());
             float d = t.getResources().getDisplayMetrics().density;
             t.setTypeface(Typeface.DEFAULT_BOLD);
             t.setIncludeFontPadding(false);
@@ -731,6 +736,7 @@ final class PubHook {
             timeColApplied = color;
             t.setTextColor(color);
         }
+        t.invalidate(); // 灰色底透明度可能变了
         return t;
     }
 
@@ -1007,7 +1013,7 @@ final class PubHook {
 
     private static boolean styleOn() {
         DanmakuConfig c = DanmakuHook.cfg;
-        return c.capOutline || c.capColor != 0;
+        return c.capOutline || c.capColor != 0 || c.lineBg > 0;
     }
 
     /** 文案文字的开头和 desc 的开头相同（只比前 DESC_CMP 个字符）。 */
@@ -1154,7 +1160,7 @@ final class PubHook {
     /** 视频文案的字色和黑边（只有这两项里有开着的才动；有变化才设，布局变化时反复调用也没有开销）。 */
     private static void styleCaption(View v) {
         DanmakuConfig c = DanmakuHook.cfg;
-        if (!c.capOutline && c.capColor == 0) return;
+        if (!c.capOutline && c.capColor == 0 && c.lineBg == 0) return;
         if (!(v instanceof TextView)) return;
         TextView t = (TextView) v;
         if (t.getTag(CAP_TAG) == null) t.setTag(CAP_TAG, Boolean.TRUE); // 认出是视频文案：cap.draw 只改打过 tag 的
@@ -1168,7 +1174,7 @@ final class PubHook {
     /** 没有在显示发布信息、只开了文案样式时：新视频开始播放 / 回到前台时找一次文案控件并设样式。 */
     private static void refreshCaption(Activity a) {
         DanmakuConfig c = DanmakuHook.cfg;
-        if (!c.capOutline && c.capColor == 0) return;
+        if (!c.capOutline && c.capColor == 0 && c.lineBg == 0) return;
         if (!isHostActivity(a)) return;
         bindAnchor((ViewGroup) a.getWindow().getDecorView());
     }
