@@ -733,7 +733,6 @@ public class MainActivity extends Activity {
     private static final String[][] HOOK_NAMES = {
             {"paint", "弹幕随机色"},
             {"comment.digg", "爱心按钮改评论"},
-            {"comment.dtap", "双击改评论"},
             {"dtap.seen", "双击改评论：识别双击（系统方法）"},
             {"dtap.cut", "双击改评论：拦在点赞之前"},
             {"dtap.click", "双击改评论：不让单击暂停视频"},
