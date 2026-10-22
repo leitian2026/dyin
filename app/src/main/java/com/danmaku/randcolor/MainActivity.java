@@ -63,8 +63,9 @@ public class MainActivity extends Activity {
     private ColorField liveColorF;
     private int liveX = 3, liveY = 10;
     private PctField bgF;
+    private BlankField blankF;
     /** 发布日期地点行、视频时长行的位置偏移（dp）：不在设置页调，在抖音里用位置浮窗调，这里只存 / 显示。 */
-    private int pubDx, timeDx;
+    private int pubX = -1, pubY = -1, timeX = -1, timeY = -1;
     private TextView tvPubPos, tvTimePos;
     private TextView tvLivePos, btnAdjust;
     private TextView tvStatus, btnPush, btnHooks;
@@ -181,6 +182,12 @@ public class MainActivity extends Activity {
         sPub.body.addView(rowLine());
         sPub.body.addView(vidPosRow(true));
         place(sPub);
+
+        blankF = new BlankField();
+        Section sBlank = new Section("文案下方空白行", false, null, () -> blankF.v == 0 ? "不留空白" : "高度 " + blankF.v * 2 + " px");
+        sBlank.body.addView(note("在视频文案下面（原来发布地那一行的位置）加一块空白，给你留出地方。每按一次 + 多 2 像素，− 少 2 像素；0 = 不留。划到下一个视频生效。"));
+        sBlank.body.addView(settingRow("高度", blankF.build()));
+        place(sBlank);
 
         bgF = new PctField(40);
         Section sBg = new Section("文字灰色底", false, null, () -> bgF.v == 0 ? "已关闭" : "不透明度 " + bgF.v + "%");
@@ -516,7 +523,7 @@ public class MainActivity extends Activity {
         row.setPadding(0, dp(8), 0, dp(8));
         LinearLayout txt = new LinearLayout(this);
         txt.setOrientation(LinearLayout.VERTICAL);
-        txt.addView(tv("水平位置", 15, cText, false));
+        txt.addView(tv("位置", 15, cText, false));
         TextView t = tv("", 13, cSub, false);
         t.setPadding(0, dp(2), 0, 0);
         if (pub) tvPubPos = t;
@@ -528,17 +535,17 @@ public class MainActivity extends Activity {
         b.setOnClickListener(v -> adjustVid(b));
         row.addView(b, new LinearLayout.LayoutParams(dp(124), dp(42)));
         box.addView(row);
-        box.addView(note("只能左右调：在抖音视频页里选「" + (pub ? "发布地" : "时长") + "」，在屏幕上左右拖动，点浮窗里的「完成」。要先打开上面的开关，那一行才看得到。"));
+        box.addView(note("全屏任意位置：在抖音视频页里选「" + (pub ? "发布地" : "时长") + "」，在屏幕上拖动，点浮窗里的「完成」。要先打开上面的开关，才看得到。"));
         return box;
     }
 
-    private static String dpText(int v) {
-        return v == 0 ? "不偏移（默认）" : (v > 0 ? "向右 " + v : "向左 " + (-v)) + " dp";
+    private static String dpText(int x, int y) {
+        return x < 0 || y < 0 ? "默认位置" : "左 " + x + " / 上 " + y + " dp";
     }
 
     private void updateVidPos() {
-        if (tvPubPos != null) tvPubPos.setText(dpText(pubDx));
-        if (tvTimePos != null) tvTimePos.setText(dpText(timeDx));
+        if (tvPubPos != null) tvPubPos.setText(dpText(pubX, pubY));
+        if (tvTimePos != null) tvTimePos.setText(dpText(timeX, timeY));
     }
 
     /** 保存并应用当前设置（带上「视频文字位置调节模式」），成功后打开抖音。 */
@@ -552,7 +559,7 @@ public class MainActivity extends Activity {
         DanmakuConfig c = read();
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("cfg", c.toText()).putString("pkg", pkgs).apply();
         c.vidAdjust = true;
-        push(list, c.toText(), btn, "去抖音里调整", "\n在抖音的视频页里，先选「发布地」或「时长」，在屏幕上左右拖动，点浮窗里的「完成」；回到这里会自动同步新位置。");
+        push(list, c.toText(), btn, "去抖音里调整", "\n在抖音的视频页里，先选「发布地」或「时长」，在屏幕上任意拖动，点浮窗里的「完成」；回到这里会自动同步新位置。");
     }
 
     @Override
@@ -583,18 +590,22 @@ public class MainActivity extends Activity {
                 if (posText != null) DanmakuConfig.applyPosText(got, posText); // 位置在抖音自己的 dyin_pos.properties 里
                 liveX = got.liveX;
                 liveY = got.liveY;
-                pubDx = got.pubDx;
-                timeDx = got.timeDx;
+                pubX = got.pubX;
+                pubY = got.pubY;
+                timeX = got.timeX;
+                timeY = got.timeY;
                 updateLivePos();
                 updateVidPos();
                 SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
                 DanmakuConfig mine = DanmakuConfig.fromText(sp.getString("cfg", ""));
                 mine.liveX = liveX;
                 mine.liveY = liveY;
-                mine.pubDx = pubDx;
-                mine.timeDx = timeDx;
+                mine.pubX = pubX;
+                mine.pubY = pubY;
+                mine.timeX = timeX;
+                mine.timeY = timeY;
                 sp.edit().putString("cfg", mine.toText()).putBoolean("adj", false).apply();
-                showStatus("已同步抖音里调好的位置（直播 " + liveX + "% / " + liveY + "%；发布地 " + pubDx + " dp；时长 " + timeDx + " dp）", 1);
+                showStatus("已同步抖音里调好的位置（直播 " + liveX + "% / " + liveY + "%；发布地 " + dpText(pubX, pubY) + "；时长 " + dpText(timeX, timeY) + "）", 1);
             });
         }).start();
     }
@@ -634,8 +645,11 @@ public class MainActivity extends Activity {
         liveY = c.liveY;
         updateLivePos();
         bgF.set(c.lineBg);
-        pubDx = c.pubDx;
-        timeDx = c.timeDx;
+        pubX = c.pubX;
+        pubY = c.pubY;
+        timeX = c.timeX;
+        timeY = c.timeY;
+        blankF.set(c.blankH);
         updateVidPos();
     }
 
@@ -661,8 +675,11 @@ public class MainActivity extends Activity {
         c.liveSize = liveSizeF.v;
         c.liveColor = liveColorF.color;
         c.lineBg = bgF.v;
-        c.pubDx = pubDx; // 位置只在抖音里用浮窗调，这里原样带着
-        c.timeDx = timeDx;
+        c.pubX = pubX; // 位置只在抖音里用浮窗调，这里原样带着
+        c.pubY = pubY;
+        c.timeX = timeX;
+        c.timeY = timeY;
+        c.blankH = blankF.v;
         c.liveX = liveX; // 位置只在抖音里用浮窗调，这里原样带着
         c.liveY = liveY;
         java.util.ArrayList<String> hid = new java.util.ArrayList<>();
@@ -736,15 +753,11 @@ public class MainActivity extends Activity {
             {"dtap.seen", "双击改评论：识别双击（系统方法）"},
             {"dtap.cut", "双击改评论：拦在点赞之前"},
             {"dtap.click", "双击改评论：不让单击暂停视频"},
-            {"time.progress", "视频时长：进度"},
-            {"time.stop", "视频时长：停止"},
-            {"time.release", "视频时长：释放"},
-            {"time.playing", "视频时长：开始播放"},
+            {"time.progress", "视频时长：播放进度"},
             {"tab.hide", "首页顶部标签隐藏"},
-            {"pub.text", "发布日期地点：认文案"},
-            {"pub.bind", "发布日期地点：视频数据"},
-            {"pub.anchor", "视频文案：描边 / 改色"},
-            {"pub.row", "发布日期地点 / 视频时长：所在容器"},
+            {"pub.bind", "发布日期地点 / 视频时长：翻页绑定（视频数据 + 页面容器）"},
+            {"pub.text", "视频文案：描边 / 改色（设置文字时）"},
+            {"pub.anchor", "视频文案：描边 / 改色（认文案控件）"},
             {"cap.draw", "视频文案：绘制时改色"},
             {"live.page", "直播间开播时间：直播间页面"},
             {"live.room", "直播间开播时间：房间数据"},
@@ -867,6 +880,42 @@ public class MainActivity extends Activity {
 
         void show() {
             if (label != null) label.setText(v + " sp");
+        }
+    }
+
+    /** 空白行高度：「−  N  +」，每次 ±1（= ±2 像素），0～200。 */
+    private final class BlankField {
+        int v;
+        TextView label;
+
+        View build() {
+            LinearLayout r = new LinearLayout(MainActivity.this);
+            r.setOrientation(LinearLayout.HORIZONTAL);
+            r.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+            TextView minus = pillButton("−", false);
+            minus.setTextSize(20);
+            minus.setOnClickListener(x -> set(v - 1));
+            r.addView(minus, new LinearLayout.LayoutParams(dp(44), dp(40)));
+            label = tv("", 15, cText, true);
+            label.setGravity(Gravity.CENTER);
+            label.setMinWidth(dp(88));
+            r.addView(label, new LinearLayout.LayoutParams(-2, -2));
+            TextView plus = pillButton("+", false);
+            plus.setTextSize(20);
+            plus.setOnClickListener(x -> set(v + 1));
+            r.addView(plus, new LinearLayout.LayoutParams(dp(44), dp(40)));
+            show();
+            return r;
+        }
+
+        void set(int n) {
+            v = Math.max(0, Math.min(200, n));
+            show();
+            refreshSummaries();
+        }
+
+        void show() {
+            if (label != null) label.setText(v + " · " + v * 2 + " px");
         }
     }
 
