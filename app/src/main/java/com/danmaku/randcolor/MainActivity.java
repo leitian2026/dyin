@@ -14,6 +14,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.Gravity;
@@ -778,17 +781,22 @@ public class MainActivity extends Activity {
                 if (isFinishing() || isDestroyed()) return;
                 setBusy(btnHooks, false, "检查钩子状态");
                 if (text == null) {
-                    showStatus("没读到钩子状态：抖音还没运行过 / 模块没在 LSPosed 里勾选它 / 没 root。先打开抖音用一会儿，再来检查。", 2);
+                    showStatus("没读到钩子状态：抖音还没运行过 / 模块没在 LSPosed 里勾选它 / 没 root。先打开抖音用一会儿，再来检查。", 2, HOOK_STATUS_SP);
                     return;
                 }
                 boolean[] bad = new boolean[1];
-                String msg = describeHooks(text, bad);
-                showStatus(msg == null ? "钩子状态文件读不懂" : msg, msg == null || bad[0] ? 2 : 1);
+                CharSequence msg = describeHooks(text, bad, dark ? 0xFFFF9C94 : 0xFFB3261E);
+                // 有不生效的：底色用普通的，只有那几行是红字；全都正常：绿色
+                showStatus(msg == null ? "钩子状态文件读不懂" : msg, msg == null ? 2 : (bad[0] ? 0 : 1), HOOK_STATUS_SP);
             });
         }).start();
     }
 
-    private static String describeHooks(String text, boolean[] bad) {
+    /** 钩子状态的字号（sp）：比普通状态（13）大两号。 */
+    private static final int HOOK_STATUS_SP = 15;
+
+    /** 每个钩子一行；不生效的（未适配 / 类一直没找到）那一行用 red 色。 */
+    private static CharSequence describeHooks(String text, boolean[] bad, int red) {
         Properties p = new Properties();
         try {
             p.load(new ByteArrayInputStream(text.getBytes(StandardCharsets.ISO_8859_1)));
@@ -796,24 +804,31 @@ public class MainActivity extends Activity {
             return null;
         }
         String ver = p.getProperty("ver");
-        StringBuilder b = new StringBuilder("抖音 ").append(ver != null ? ver : "（版本未知）").append('\n');
+        SpannableStringBuilder b = new SpannableStringBuilder("抖音 ");
+        b.append(ver != null ? ver : "（版本未知）").append('\n');
         for (String[] h : HOOK_NAMES) {
             String st = p.getProperty(h[0]), note = p.getProperty(h[0] + ".note");
             boolean hasNote = note != null && !note.isEmpty();
+            int start = b.length();
+            boolean fail = false;
             if ("ok".equals(st)) {
                 b.append("✓ ").append(h[1]).append(hasNote ? "（" + note + "）" : "");
             } else if ("gaveup".equals(st)) {
-                bad[0] = true;
+                fail = true;
                 b.append("✗ ").append(h[1]).append("：未适配").append(hasNote ? " — " + note : "");
             } else if ("missing".equals(st)) {
-                bad[0] = true;
+                fail = true;
                 b.append("✗ ").append(h[1]).append("：相关的类一直没找到");
             } else {
                 b.append("… ").append(h[1]).append("：还没挂上（抖音还没走到相关界面）");
             }
+            if (fail) {
+                bad[0] = true;
+                b.setSpan(new ForegroundColorSpan(red), start, b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
             b.append('\n');
         }
-        return b.toString().trim();
+        return b.delete(b.length() - 1, b.length());
     }
 
     // ------------------------------------------------------------ 字号 / 颜色（时长、发布信息、文案共用）
@@ -1288,7 +1303,11 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------ 状态卡片 / 忙碌态
 
     /** tone: 0 普通  1 成功  2 失败 */
-    private void showStatus(String msg, int tone) {
+    private void showStatus(CharSequence msg, int tone) {
+        showStatus(msg, tone, 13);
+    }
+
+    private void showStatus(CharSequence msg, int tone, int sp) {
         int bg, fg;
         if (tone == 1) {
             bg = dark ? 0xFF16301F : 0xFFE8F6EC;
@@ -1302,6 +1321,7 @@ public class MainActivity extends Activity {
         }
         statusCard.setBackground(round(bg, 0, 16));
         tvStatus.setTextColor(fg);
+        tvStatus.setTextSize(sp);
         tvStatus.setText(msg);
         statusCard.setVisibility(View.VISIBLE);
         scroll.post(() -> scroll.smoothScrollTo(0, Math.max(0, statusCard.getTop() - dp(12))));
