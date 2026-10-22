@@ -42,6 +42,8 @@ public final class DanmakuConfig {
     public int liveX = 3, liveY = 10;
     /** 位置调节模式：设置页点「去抖音里调整」时置 true；进直播间后抖音里出现位置浮窗，点「完成 / 取消」时由抖音里的浮窗改回 false 并写回文件。设置页自己存的配置里永远是 false。 */
     public boolean liveAdjust = false;
+    /** 视频文案 / 视频时长 / 发布日期地点每一行字后面的灰色底的不透明度（0～100，%）；0 = 不画。见 LineBg。 */
+    public int lineBg = 40;
     /** 开播时间那一行的模板，见 LiveFormat。 */
     public String liveFormat = LiveFormat.DEFAULT;
     public static final int SIZE_MIN = 8, SIZE_MAX = 40;
@@ -74,6 +76,7 @@ public final class DanmakuConfig {
             p.setProperty("liveX", String.valueOf(liveX));
             p.setProperty("liveY", String.valueOf(liveY));
             p.setProperty("liveAdjust", String.valueOf(liveAdjust));
+            p.setProperty("lineBg", String.valueOf(lineBg));
             p.setProperty("liveFormat", liveFormat == null ? LiveFormat.DEFAULT : liveFormat);
             StringBuilder sb = new StringBuilder();
             for (String s : hiddenTabs) sb.append(sb.length() == 0 ? "" : ",").append(s);
@@ -129,6 +132,7 @@ public final class DanmakuConfig {
         c.liveColor = parseColor(p.getProperty("liveColor", "0"));
         c.liveX = parsePct(p.getProperty("liveX", "3"), 3);
         c.liveY = parsePct(p.getProperty("liveY", "10"), 10);
+        c.lineBg = parsePct(p.getProperty("lineBg", "40"), 40);
         c.liveAdjust = Boolean.parseBoolean(p.getProperty("liveAdjust", "false").trim());
         String lf = p.getProperty("liveFormat", LiveFormat.DEFAULT);
         c.liveFormat = lf == null || lf.trim().isEmpty() ? LiveFormat.DEFAULT : lf;
