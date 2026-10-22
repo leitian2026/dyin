@@ -30,8 +30,8 @@ sig=<apk大小>-<apk修改时间>-<RULES_REV>
 ver=40.7.0 (400701)
 paint=ok
 paint.note=宽松匹配            # 可选，ok 时显示在括号里
-comment.dtap=gaveup
-comment.dtap.note=LLLIILIL(MotionEvent) 在 BaseListFragmentPanel 里没有找到（……）
+comment.digg=gaveup
+comment.digg.note=LJJJJJL 在 FeedDiggPresenter 里没有找到（……）
 time.stop=missing
 ```
 
