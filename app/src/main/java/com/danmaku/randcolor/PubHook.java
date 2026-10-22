@@ -303,7 +303,7 @@ final class PubHook {
                 if (!(self instanceof TextView) || ((View) self).getTag(CAP_TAG) == null) return;
                 int bg = DanmakuHook.cfg.lineBg;
                 if (bg > 0 && p.args != null && p.args.length > 0 && p.args[0] instanceof android.graphics.Canvas) {
-                    LineBg.draw((android.graphics.Canvas) p.args[0], (TextView) self, bg); // 文字灰色底：画在字之前
+                    LineBg.drawBars((android.graphics.Canvas) p.args[0], (TextView) self, bg); // 文字灰色底：画在字之前
                 }
                 int want = DanmakuHook.cfg.capColor;
                 Field f = fCurColor;
