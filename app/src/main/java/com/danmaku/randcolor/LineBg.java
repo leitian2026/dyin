@@ -12,7 +12,7 @@ import android.widget.TextView;
  * 底 = 这一行的文字框向四周各放大 1sp（宽、高都比字大一个字号档），圆角；多行的底画成一个整体（Path 并集），重叠处不会变深。
  *
  * 画在文字之前：自己的两行（发布信息、时长）用 {@link Row}（TextView 子类，onDraw 先画底再 super）；
- * 抖音的文案控件在 PubHook.DrawHook（MentionTextView#onDraw 之前）里调 {@link #draw}。
+ * 抖音的文案控件在 PubHook.DrawHook（MentionTextView#onDraw 之前）里调 {@link #drawBars}。
  * 绘制路径里不分配对象：Path / Paint 是静态复用的（都在主线程绘制，不重入）。
  */
 final class LineBg {
@@ -28,7 +28,7 @@ final class LineBg {
     }
 
     /** 在 cv 上给 t 的每一行文字画底。t 还没排好版（没有 Layout）或 pct <= 0 就什么都不画。 */
-    static void draw(Canvas cv, TextView t, int pct) {
+    static void drawBars(Canvas cv, TextView t, int pct) {
         if (pct <= 0 || cv == null) return;
         Layout l = t.getLayout();
         if (l == null) return;
@@ -58,7 +58,7 @@ final class LineBg {
         @Override
         protected void onDraw(Canvas canvas) {
             try {
-                draw(canvas, this, DanmakuHook.cfg.lineBg);
+                drawBars(canvas, this, DanmakuHook.cfg.lineBg);
             } catch (Throwable ignored) {
             }
             super.onDraw(canvas);
