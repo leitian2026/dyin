@@ -571,6 +571,7 @@ final class PubHook {
         }
         row.setTextSize(TypedValue.COMPLEX_UNIT_SP, c.pubSize);
         fitSpacing(row, cap);
+        watchGaps(intro);
         int color = c.pubColor != 0 ? c.pubColor : ROW_COLOR;
         if (row.getCurrentTextColor() != color) row.setTextColor(color);
         if (!line.contentEquals(row.getText())) row.setText(line);
@@ -585,6 +586,75 @@ final class PubHook {
         t.setShadowLayer(5f * d, 0f, 0f, 0xFF000000); // 和时长行的字描边一样
         t.setLayoutParams(rowLp(cap, d));
         return t;
+    }
+
+    private static final int GAP_TAG = 0x7e0b0c02, SHIFT_TAG = 0x7e0b0c03; // 应用自己的 tag key
+    private static final View.OnLayoutChangeListener GAP_LISTENER = new View.OnLayoutChangeListener() {
+        @Override
+        public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+            try {
+                if (v instanceof ViewGroup) closeGaps((ViewGroup) v);
+            } catch (Throwable ignored) {
+            }
+        }
+    };
+
+    /** 给这个容器挂一次布局监听（每个容器只挂一次）：每次布局完，把我们自己的行贴紧上一行。 */
+    private static void watchGaps(ViewGroup intro) {
+        if (intro.getTag(GAP_TAG) != null) return;
+        intro.setTag(GAP_TAG, Boolean.TRUE);
+        intro.addOnLayoutChangeListener(GAP_LISTENER);
+    }
+
+    /** v 的顶边在 intro 坐标里的位置（含平移）；v 不在 intro 里返回 NaN。 */
+    private static float topIn(ViewGroup intro, View v) {
+        float y = 0f;
+        View x = v;
+        while (x != null && x != intro) {
+            y += x.getTop() + x.getTranslationY();
+            ViewParent p = x.getParent();
+            x = p instanceof View ? (View) p : null;
+        }
+        return x == intro ? y : Float.NaN;
+    }
+
+    /**
+     * 行距：不靠外边距（抖音这个容器没按我们设的负边距排，实测文案到发布信息 66px、发布信息到时长 74px，文案自己两行才 50px），
+     * 而是布局做完后读每一行的实际位置，把它往上平移（translationY，不影响布局，哪种父控件都一样）到「字的行框」紧贴上一行的行框：
+     * 文案最后一行 → 发布信息行 → 时长行。只往上挪，不往下。挪出来的空位由后面的兄弟控件（作者声明等）一起上移同样的距离，
+     * 它们和时长行的间距保持原样，被挪过的做个 tag，不用挪了就还原。translationY 不会引起重新布局，所以不会循环触发这个监听。
+     */
+    private static void closeGaps(ViewGroup intro) {
+        Rows rs = rowsOf(intro, false);
+        TextView cap = rs == null ? null : rs.cap;
+        float prev = Float.NaN; // 上一行文字的行框下边（intro 坐标，含平移）
+        if (cap != null && cap.getLayout() != null) {
+            float base = topIn(intro, cap);
+            float text = cap.getTotalPaddingTop() + cap.getLayout().getLineBottom(cap.getLayout().getLineCount() - 1);
+            float box = cap.getHeight() - cap.getTotalPaddingBottom() + cap.getTotalPaddingTop();
+            prev = base + Math.min(text, box);
+        }
+        float shift = 0f;
+        boolean seen = false;
+        int n = intro.getChildCount();
+        for (int i = 0; i < n; i++) {
+            View c = intro.getChildAt(i);
+            if (c instanceof LineBg.Row) {
+                if (c.getVisibility() == View.GONE) continue;
+                float t = Float.isNaN(prev) ? 0f : Math.min(0f, prev - (c.getTop() + c.getPaddingTop()));
+                if (c.getTranslationY() != t) c.setTranslationY(t);
+                prev = c.getBottom() - c.getPaddingBottom() + t;
+                shift = t;
+                seen = true;
+            } else if (seen) {
+                if (c.getTranslationY() != shift && (shift != 0f || c.getTag(SHIFT_TAG) != null)) c.setTranslationY(shift);
+                if (shift != 0f) {
+                    if (c.getTag(SHIFT_TAG) == null) c.setTag(SHIFT_TAG, Boolean.TRUE);
+                } else if (c.getTag(SHIFT_TAG) != null) {
+                    c.setTag(SHIFT_TAG, null);
+                }
+            }
+        }
     }
 
     /**
@@ -756,6 +826,7 @@ final class PubHook {
             t.setTextSize(TypedValue.COMPLEX_UNIT_SP, c.timeSize);
         }
         fitSpacing(t, r.cap);
+        watchGaps(intro);
         int color = c.timeColor != 0 ? c.timeColor : TIME_COLOR;
         if (color != timeColApplied) {
             timeColApplied = color;
