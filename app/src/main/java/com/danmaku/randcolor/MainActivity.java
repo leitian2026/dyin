@@ -551,6 +551,7 @@ public class MainActivity extends Activity {
         final String pkg = list.get(0);
         new Thread(() -> {
             final String text = RootShell.readConfig(pkg);
+            final String posText = RootShell.readFile(pkg, "dyin_pos.properties");
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
                 if (text == null) {
@@ -562,6 +563,7 @@ public class MainActivity extends Activity {
                     showStatus("抖音里的位置浮窗还没点「完成」或「取消」。调好、点完成后，再回到这里。", 0);
                     return;
                 }
+                if (posText != null) DanmakuConfig.applyPosText(got, posText); // 位置在抖音自己的 dyin_pos.properties 里
                 liveX = got.liveX;
                 liveY = got.liveY;
                 pubDx = got.pubDx;
