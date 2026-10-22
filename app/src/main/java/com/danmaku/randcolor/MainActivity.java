@@ -62,6 +62,7 @@ public class MainActivity extends Activity {
     private SizeField liveSizeF;
     private ColorField liveColorF;
     private int liveX = 3, liveY = 10;
+    private PctField bgF;
     private TextView tvLivePos, btnAdjust;
     private TextView tvStatus, btnPush, btnHooks;
     private ScrollView scroll;
@@ -175,6 +176,13 @@ public class MainActivity extends Activity {
         sPub.body.addView(sub("颜色"));
         sPub.body.addView(pubColorF.build());
         root.addView(sPub.box, cardLp());
+
+        bgF = new PctField(40);
+        Section sBg = new Section("文字灰色底", false, null, () -> bgF.v == 0 ? "已关闭" : "不透明度 " + bgF.v + "%");
+        sBg.body.addView(note("给视频文案、视频时长、发布日期地点的每一行字加一条灰色底，底比字大一个字号（四周各多 1 sp）。0% = 不加。文案的底在文案控件边界处可能被裁掉一点。"));
+        sBg.body.addView(sub("不透明度"));
+        sBg.body.addView(bgF.build());
+        root.addView(sBg.box, cardLp());
 
         swCapOutline = new Switch(this);
         capColorF = new ColorField("不改（抖音原来的颜色）", "选择文案颜色");
@@ -362,7 +370,7 @@ public class MainActivity extends Activity {
             chev = tv("▾", 18, cSub, true);
             chev.setGravity(Gravity.CENTER);
             head.addView(chev, new LinearLayout.LayoutParams(dp(32), dp(32)));
-            head.setOnClickListener(v -> setOpen(!open, true));
+            head.setOnClickListener(v -> setOpen(!open));
             box.addView(head, new LinearLayout.LayoutParams(-1, -2));
             body = new LinearLayout(MainActivity.this);
             body.setOrientation(LinearLayout.VERTICAL);
@@ -373,14 +381,21 @@ public class MainActivity extends Activity {
             if (!nested) sections.add(this);
         }
 
-        void setOpen(boolean o, boolean scrollTo) {
+        void setOpen(boolean o) {
             if (o == open) return;
+            int before = box.getTop() - scroll.getScrollY(); // 标题行现在在屏幕上的位置
             open = o;
             body.setVisibility(o ? View.VISIBLE : View.GONE);
             chev.setText(o ? "▴" : "▾");
             if (o && !nested) {
-                for (Section s : sections) if (s != this && s.open) s.setOpen(false, false);
-                if (scrollTo) scrollToView(box);
+                boolean closed = false;
+                for (Section s : sections) {
+                    if (s != this && s.open) {
+                        s.setOpen(false);
+                        closed = true;
+                    }
+                }
+                if (closed) keepInPlace(box, before); // 上面的分组收起会把内容顶上去，滚回来让标题行原地不动
             }
         }
 
@@ -401,13 +416,14 @@ public class MainActivity extends Activity {
         for (Section s : allSections) s.refresh();
     }
 
-    /** 等这一轮布局做完（别的分组收起后位置会变）再把这个分组滚到顶部附近。 */
-    private void scrollToView(final View v) {
+    /** 展开原地进行：别的分组收起后这一轮布局做完，如果 v 在屏幕上的位置变了，就把滚动补回去，v 保持在原来的位置。 */
+    private void keepInPlace(final View v, final int before) {
         v.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
             @Override
             public void onGlobalLayout() {
                 v.getViewTreeObserver().removeOnGlobalLayoutListener(this);
-                scroll.smoothScrollTo(0, Math.max(0, v.getTop() - dp(12)));
+                int now = v.getTop() - scroll.getScrollY();
+                if (now != before) scroll.scrollBy(0, now - before);
             }
         });
     }
@@ -547,6 +563,7 @@ public class MainActivity extends Activity {
         liveX = c.liveX;
         liveY = c.liveY;
         updateLivePos();
+        bgF.set(c.lineBg);
     }
 
     private DanmakuConfig read() {
@@ -570,6 +587,7 @@ public class MainActivity extends Activity {
         c.liveFormat = lft.trim().isEmpty() ? LiveFormat.DEFAULT : lft;
         c.liveSize = liveSizeF.v;
         c.liveColor = liveColorF.color;
+        c.lineBg = bgF.v;
         c.liveX = liveX; // 位置只在抖音里用浮窗调，这里原样带着
         c.liveY = liveY;
         java.util.ArrayList<String> hid = new java.util.ArrayList<>();
@@ -773,6 +791,45 @@ public class MainActivity extends Activity {
 
         void show() {
             if (label != null) label.setText("字号 " + v + " sp");
+        }
+    }
+
+    /** 百分比行：「−  不透明度 N%  +」，每次 5%，0～100。 */
+    private final class PctField {
+        int v;
+        TextView label;
+
+        PctField(int def) {
+            v = def;
+        }
+
+        View build() {
+            LinearLayout r = new LinearLayout(MainActivity.this);
+            r.setOrientation(LinearLayout.HORIZONTAL);
+            r.setGravity(Gravity.CENTER_VERTICAL);
+            TextView minus = pillButton("−", false);
+            minus.setTextSize(20);
+            minus.setOnClickListener(x -> set(v - 5));
+            r.addView(minus, new LinearLayout.LayoutParams(dp(56), dp(48)));
+            label = tv("", 16, cText, true);
+            label.setGravity(Gravity.CENTER);
+            r.addView(label, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView plus = pillButton("+", false);
+            plus.setTextSize(20);
+            plus.setOnClickListener(x -> set(v + 5));
+            r.addView(plus, new LinearLayout.LayoutParams(dp(56), dp(48)));
+            show();
+            return r;
+        }
+
+        void set(int n) {
+            v = Math.max(0, Math.min(100, n));
+            show();
+            refreshSummaries();
+        }
+
+        void show() {
+            if (label != null) label.setText("不透明度 " + v + "%");
         }
     }
 
