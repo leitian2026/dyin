@@ -2,12 +2,10 @@ package com.danmaku.randcolor;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
-import android.graphics.Canvas;
-import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -16,23 +14,26 @@ import android.os.Build;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
 import java.util.Properties;
+import java.util.function.Supplier;
 
 /** 设置页：卡片 + 开关行 + 分段按钮 + 底部固定操作栏。纯框架控件，不依赖任何第三方库；跟随系统深浅色。 */
 public class MainActivity extends Activity {
@@ -48,28 +49,26 @@ public class MainActivity extends Activity {
     private final CheckBox[] cbTabs = new CheckBox[TAB_LABELS.length];
     private Switch swEnabled, swLikeBtn, swDtap, swTime, swPub;
     private LinearLayout segMode, statusCard;
-    /** 时长 / 发布信息的字号（sp）、三处颜色（0 = 默认 / 不改）、发布信息模板和它的预览。 */
+    /** 时长 / 发布信息的字号（sp）、三处颜色（0 = 默认 / 不改）、发布信息的积木列表。 */
     private SizeField timeSizeF, pubSizeF;
     private ColorField timeColorF, pubColorF, capColorF;
     private final java.util.ArrayList<Block> blocks = new java.util.ArrayList<>();
     private LinearLayout blockList;
-    private TextView tvPubPreview;
     private Switch swCapOutline;
-    /** 直播间开播时间：开关、取哪个时间、模板、字号、颜色、位置（百分比）和位置预览。 */
+    /** 直播间开播时间：开关、取哪个时间、模板、字号、颜色。位置（百分比）不在设置页调，在抖音里用浮窗拖，这里只存 / 显示。 */
     private Switch swLive;
     private LinearLayout segLiveSrc;
     private EditText etLiveFmt;
     private SizeField liveSizeF;
     private ColorField liveColorF;
-    private SeekBar sbLiveX, sbLiveY;
-    private TextView tvLiveX, tvLiveY, tvLiveFmtPreview;
-    private PosPreview livePreview;
+    private int liveX = 3, liveY = 10;
+    private TextView tvLivePos, btnAdjust;
     private TextView tvStatus, btnPush, btnHooks;
     private ScrollView scroll;
 
     @Override
-    protected void onCreate(Bundle b) {
-        super.onCreate(b);
+    protected void onCreate(Bundle state) {
+        super.onCreate(state);
         setTitle("dyin");
         dark = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
         initPalette();
@@ -91,95 +90,60 @@ public class MainActivity extends Activity {
 
         // ---- 标题
         TextView title = tv("dyin", 30, cText, true);
-        title.setPadding(dp(4), 0, 0, 0);
+        title.setPadding(dp(4), 0, 0, dp(2));
         root.addView(title);
-        TextView sub = tv("弹幕随机颜色 · 点赞改为打开评论 · 视频时长常显 · 发布日期地点常显", 14, cSub, false);
-        sub.setPadding(dp(4), dp(2), 0, dp(14));
-        root.addView(sub);
 
-        // ---- 怎么用
-        LinearLayout how = card();
-        how.addView(tv("怎么用", 20, cText, true));
-        TextView pre = tv("前提：已在 LSPosed 里启用本模块，并在作用域勾选抖音。", 14, cSub, false);
-        pre.setPadding(0, dp(4), 0, dp(14));
-        how.addView(pre);
-        how.addView(step(1, "启用并重开抖音", "LSPosed 里启用模块、勾选抖音，然后强杀抖音再打开（只需做一次）"));
-        how.addView(step(2, "调整下面的设置", "选好弹幕颜色，决定点赞按钮 / 双击是否改为打开评论"));
-        how.addView(step(3, "点下方「保存并应用」", "把设置推送给抖音（需要 root）。抖音回到前台就生效，不用重启"));
-        root.addView(how, cardLp());
+        // ================= 弹幕与点赞
+        root.addView(groupLabel("弹幕与点赞"));
 
-        // ---- 目标 App
-        root.addView(section("目标 App"));
-        LinearLayout target = card();
-        target.addView(tv("包名", 17, cText, true));
-        TextView pd = tv("要作用的 App，多个包名用逗号分隔，默认是抖音。", 13, cSub, false);
-        pd.setPadding(0, dp(2), 0, dp(10));
-        target.addView(pd);
-        etPkg = field();
-        target.addView(etPkg);
-        target.addView(divider());
         swEnabled = new Switch(this);
-        target.addView(switchRow("启用弹幕随机色", "关闭后弹幕恢复原本的颜色", swEnabled));
-        root.addView(target, cardLp());
-
-        // ---- 弹幕颜色
-        root.addView(section("弹幕颜色"));
-        LinearLayout colors = card();
-        colors.addView(tv("颜色风格", 17, cText, true));
-        TextView d1 = tv("鲜艳：高饱和亮色，看得清；任意：含浅色、粉彩，更杂。", 13, cSub, false);
-        d1.setPadding(0, dp(2), 0, dp(10));
-        colors.addView(d1);
+        Section sDanmaku = new Section("弹幕随机色", false, swEnabled,
+                () -> swEnabled.isChecked() ? "已开启 · " + (segIndex(segMode) == 1 ? "任意" : "鲜艳") : "已关闭");
+        sDanmaku.body.addView(note("鲜艳：高饱和亮色，看得清；任意：含浅色、粉彩，更杂。关掉右上角的开关，弹幕恢复原本的颜色。"));
         segMode = segmented("鲜艳", "任意");
-        colors.addView(segMode);
-        root.addView(colors, cardLp());
+        sDanmaku.body.addView(segMode);
+        root.addView(sDanmaku.box, cardLp());
 
-        // ---- 点赞改为打开评论
-        root.addView(section("点赞 → 打开评论"));
-        LinearLayout like = card();
         swLikeBtn = new Switch(this);
-        like.addView(switchRow("点右侧爱心按钮时打开评论", "不再点赞（也不会取消赞），改为点开这个视频的评论", swLikeBtn));
-        like.addView(divider());
         swDtap = new Switch(this);
-        like.addView(switchRow("双击视频时打开评论", "双击不再点赞，改为打开评论", swDtap));
-        TextView ld = tv("右侧按钮：找不到评论按钮时不拦截，点赞照常；双击：始终不点赞，也不出红心。", 13, cSub, false);
-        ld.setPadding(0, dp(12), 0, 0);
-        like.addView(ld);
-        root.addView(like, cardLp());
+        Section sLike = new Section("点赞改为打开评论", false, null, () -> {
+            boolean a = swLikeBtn.isChecked(), b = swDtap.isChecked();
+            return a && b ? "爱心按钮 · 双击视频" : a ? "爱心按钮" : b ? "双击视频" : "未开启";
+        });
+        sLike.body.addView(switchRow("点右侧爱心按钮时打开评论", "不再点赞（也不会取消赞）；找不到评论按钮时点赞照常", swLikeBtn));
+        sLike.body.addView(divider());
+        sLike.body.addView(switchRow("双击视频时打开评论", "双击不再点赞，也不出红心", swDtap));
+        root.addView(sLike.box, cardLp());
 
-        // ---- 视频时长常显
-        root.addView(section("视频时长常显"));
-        LinearLayout tm = card();
+        // ================= 视频页
+        root.addView(groupLabel("视频页"));
+
         swTime = new Switch(this);
-        tm.addView(switchRow("视频时长一直显示", "在视频文案下面单独显示一行 00:12 / 03:45：有发布日期和地点时放在它的正下方；播放时随进度走动；刷到直播或离开视频页自动隐藏", swTime));
-        tm.addView(divider());
-        tm.addView(tv("字号", 17, cText, true));
-        TextView td = tv("8～40 sp，默认 20。位置由抖音的布局决定（发布日期和地点下面），不用调。点「保存并应用」后，抖音回到前台就生效。", 13, cSub, false);
-        td.setPadding(0, dp(2), 0, dp(12));
-        tm.addView(td);
         timeSizeF = new SizeField(20);
-        tm.addView(timeSizeF.build());
-        tm.addView(divider());
-        tm.addView(tv("颜色", 17, cText, true));
-        TextView tcd = tv("点「选色」从色表里挑一个，也可以输入自己的色值。和视频文案的颜色互不影响。", 13, cSub, false);
-        tcd.setPadding(0, dp(2), 0, dp(12));
-        tm.addView(tcd);
         timeColorF = new ColorField("默认（白色）", "选择时长颜色");
-        tm.addView(timeColorF.build());
-        root.addView(tm, cardLp());
+        Section sTime = new Section("视频时长常显", false, swTime,
+                () -> swTime.isChecked() ? "已开启 · " + timeSizeF.v + " sp" : "已关闭");
+        sTime.body.addView(note("在视频文案下面显示一行 00:12 / 03:45，播放时随进度走动；刷到直播或离开视频页自动隐藏。位置由抖音的布局决定，不用调。"));
+        sTime.body.addView(sub("字号（8～40 sp）"));
+        sTime.body.addView(timeSizeF.build());
+        sTime.body.addView(sub("颜色"));
+        sTime.body.addView(timeColorF.build());
+        root.addView(sTime.box, cardLp());
 
-        // ---- 发布日期和地点常显
-        root.addView(section("发布日期和地点常显"));
-        LinearLayout pb = card();
         swPub = new Switch(this);
-        pb.addView(switchRow("发布日期和地点一直显示", "在视频文案下面单独显示一行（有作者声明时在声明上方）；取自视频本身的发布时间（精确到秒）和 IP 属地（省，有城市就加市），不用点「展开」", swPub));
-        pb.addView(divider());
-        pb.addView(tv("显示内容和顺序", 17, cText, true));
-        TextView pfd = tv("下面每一项按从上到下的顺序显示在同一行，数据项之间自动空一格：点 ↑ ↓ 调顺序，✕ 删除；「+ 文字」加你自己的字，比如「发布时间：」「发布地：」，文字里的空格会原样保留；「+ 换行」另起一行。不限长度，太长会自动换行，不会被截断。", 13, cSub, false);
-        pfd.setPadding(0, dp(2), 0, dp(10));
-        pb.addView(pfd);
+        pubSizeF = new SizeField(16);
+        pubColorF = new ColorField("默认（半透明白）", "选择发布信息颜色");
+        Section sPub = new Section("发布日期和地点常显", false, swPub,
+                () -> swPub.isChecked() ? "已开启 · " + pubSizeF.v + " sp" : "已关闭");
+        sPub.body.addView(note("在视频文案下面单独显示一行（有作者声明时在声明上方），取自视频本身的发布时间和 IP 属地，不用点「展开」。字号和颜色改完，划到下一个视频生效。"));
+        Section sBlocks = new Section("显示内容和顺序", true, null, () -> {
+            String s = PubFormat.render(toTemplate(), PREVIEW_SEC, "广西", "南宁");
+            return s == null ? "预览：（空，不显示）" : "预览：" + oneLine(s);
+        });
+        sBlocks.body.addView(note("点 ↑ ↓ 调顺序，✕ 删除；「+ 文字」加自己的字（空格原样保留），「+ 换行」另起一行。太长会自动换行，不截断。"));
         blockList = new LinearLayout(this);
         blockList.setOrientation(LinearLayout.VERTICAL);
-        pb.addView(blockList);
+        sBlocks.body.addView(blockList);
         LinearLayout add1 = new LinearLayout(this);
         add1.setOrientation(LinearLayout.HORIZONTAL);
         String[] toks = {"日期", "时间", "地点", "省", "市"};
@@ -191,7 +155,7 @@ public class MainActivity extends Activity {
         }
         LinearLayout.LayoutParams a1l = new LinearLayout.LayoutParams(-1, -2);
         a1l.topMargin = dp(4);
-        pb.addView(add1, a1l);
+        sBlocks.body.addView(add1, a1l);
         LinearLayout add2 = new LinearLayout(this);
         add2.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout.LayoutParams c1 = new LinearLayout.LayoutParams(0, dp(44), 1f);
@@ -204,121 +168,78 @@ public class MainActivity extends Activity {
         add2.addView(addButton("恢复默认", () -> parseTemplate(PubFormat.DEFAULT)), c3);
         LinearLayout.LayoutParams a2l = new LinearLayout.LayoutParams(-1, -2);
         a2l.topMargin = dp(8);
-        pb.addView(add2, a2l);
-        tvPubPreview = tv("", 14, cText, false);
-        tvPubPreview.setPadding(dp(4), dp(12), 0, 0);
-        pb.addView(tvPubPreview);
-        pb.addView(divider());
-        pb.addView(tv("字号", 17, cText, true));
-        TextView pdsc = tv("8～40 sp，默认 16。位置由抖音的布局决定（文案下面、作者声明上面），不用调。点「保存并应用」后，抖音回到前台、划到下一个视频时生效。", 13, cSub, false);
-        pdsc.setPadding(0, dp(2), 0, dp(12));
-        pb.addView(pdsc);
-        pubSizeF = new SizeField(16);
-        pb.addView(pubSizeF.build());
-        pb.addView(divider());
-        pb.addView(tv("颜色", 17, cText, true));
-        TextView pcd = tv("点「选色」从色表里挑一个，也可以输入自己的色值。和视频文案的颜色互不影响。", 13, cSub, false);
-        pcd.setPadding(0, dp(2), 0, dp(12));
-        pb.addView(pcd);
-        pubColorF = new ColorField("默认（半透明白）", "选择发布信息颜色");
-        pb.addView(pubColorF.build());
-        root.addView(pb, cardLp());
+        sBlocks.body.addView(add2, a2l);
+        sPub.body.addView(sBlocks.box, nestLp());
+        sPub.body.addView(sub("字号（8～40 sp）"));
+        sPub.body.addView(pubSizeF.build());
+        sPub.body.addView(sub("颜色"));
+        sPub.body.addView(pubColorF.build());
+        root.addView(sPub.box, cardLp());
 
-        // ---- 直播间开播时间
-        root.addView(section("直播间开播时间"));
-        LinearLayout lv = card();
+        swCapOutline = new Switch(this);
+        capColorF = new ColorField("不改（抖音原来的颜色）", "选择文案颜色");
+        Section sCap = new Section("视频文案样式", false, null,
+                () -> "描边 " + (swCapOutline.isChecked() ? "开" : "关") + " · 颜色 " + (capColorF.color == 0 ? "不改" : "自定义"));
+        sCap.body.addView(switchRow("给视频文案加黑色描边", "亮背景上也看得清；关掉后要重启抖音才恢复", swCapOutline));
+        sCap.body.addView(divider());
+        sCap.body.addView(sub("文案颜色"));
+        sCap.body.addView(note("话题、@ 这类抖音自己上色的文字不变；选过颜色再改回「不改」，要重启抖音才恢复。"));
+        sCap.body.addView(capColorF.build());
+        root.addView(sCap.box, cardLp());
+
+        // ================= 直播间
+        root.addView(groupLabel("直播间"));
+
         swLive = new Switch(this);
-        lv.addView(switchRow("直播间里显示开播时间", "进直播间时在画面上叠一行开播时间；只在直播间里显示，其他界面（推荐、关注、同城……）都不显示。点「保存并应用」后，抖音回到前台、重新进直播间生效", swLive));
-        lv.addView(divider());
-        lv.addView(tv("显示哪个时间", 17, cText, true));
-        TextView lsd = tv("「开播时间」是直播间数据里的 startTime（没有就用创建时间）；「房间创建时间」是 createTime，通常比开播早几秒。哪个更准要在你的直播间里对一下。", 13, cSub, false);
-        lsd.setPadding(0, dp(2), 0, dp(10));
-        lv.addView(lsd);
+        liveSizeF = new SizeField(14);
+        liveColorF = new ColorField("默认（白色）", "选择开播时间颜色");
+        tvLivePos = tv("", 15, cText, false);
+        Section sLive = new Section("直播间开播时间", false, swLive,
+                () -> swLive.isChecked() ? "已开启 · 位置 " + liveX + "% / " + liveY + "%" : "已关闭");
+        sLive.body.addView(note("进直播间时在画面上叠一行开播时间，只在直播间里显示，推荐、关注、同城这些界面都不显示。重新进直播间生效。"));
+        Section sLiveFmt = new Section("来源与格式", true, null, () -> {
+            String s = LiveFormat.render(etLiveFmt.getText().toString(), PREVIEW_SEC);
+            return s == null ? "（没有内容）" : "预览：" + oneLine(s);
+        });
+        sLiveFmt.body.addView(sub("显示哪个时间"));
+        sLiveFmt.body.addView(note("「开播时间」是房间数据里的 startTime（没有就用创建时间）；「房间创建时间」是 createTime，通常比开播早几秒。哪个更准要在你的直播间里对一下。"));
         segLiveSrc = segmented("开播时间", "房间创建时间");
-        lv.addView(segLiveSrc);
-        lv.addView(divider());
-        lv.addView(tv("显示格式", 17, cText, true));
-        TextView lfd = tv("可用：{日期} 如 2026-10-22，{时间} 如 07:22:36，{月日} 如 10-22；其他文字原样显示，两个字符 \\n 表示换行。", 13, cSub, false);
-        lfd.setPadding(0, dp(2), 0, dp(10));
-        lv.addView(lfd);
+        sLiveFmt.body.addView(segLiveSrc);
+        sLiveFmt.body.addView(sub("显示格式"));
+        sLiveFmt.body.addView(note("可用：{日期} 如 2026-10-22，{时间} 如 07:22:36，{月日} 如 10-22；其他文字原样显示，两个字符 \\n 表示换行。"));
         etLiveFmt = field();
         etLiveFmt.setHint(LiveFormat.DEFAULT);
-        etLiveFmt.addTextChangedListener(new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence cs, int a, int b2, int c2) {
-            }
+        watch(etLiveFmt);
+        sLiveFmt.body.addView(etLiveFmt);
+        sLive.body.addView(sLiveFmt.box, nestLp());
+        sLive.body.addView(sub("字号（8～40 sp）"));
+        sLive.body.addView(liveSizeF.build());
+        sLive.body.addView(sub("颜色（带一圈黑边，亮背景上也看得清）"));
+        sLive.body.addView(liveColorF.build());
+        sLive.body.addView(sub("位置"));
+        LinearLayout posRow = new LinearLayout(this);
+        posRow.setOrientation(LinearLayout.HORIZONTAL);
+        posRow.setGravity(Gravity.CENTER_VERTICAL);
+        posRow.addView(tvLivePos, new LinearLayout.LayoutParams(0, -2, 1f));
+        btnAdjust = pillButton("去抖音里调整", true);
+        btnAdjust.setTextSize(15);
+        btnAdjust.setOnClickListener(v -> adjustLivePos());
+        posRow.addView(btnAdjust, new LinearLayout.LayoutParams(dp(136), dp(48)));
+        sLive.body.addView(posRow);
+        TextView adjNote = note("点按钮会先保存并应用当前设置，再打开抖音。进入直播间后，在屏幕上拖动文字，点浮窗里的「完成」。");
+        adjNote.setPadding(0, dp(8), 0, 0);
+        sLive.body.addView(adjNote);
+        root.addView(sLive.box, cardLp());
 
-            @Override
-            public void onTextChanged(CharSequence cs, int a, int b2, int c2) {
-            }
+        // ================= 界面与系统
+        root.addView(groupLabel("界面与系统"));
 
-            @Override
-            public void afterTextChanged(Editable e) {
-                updateLivePreview();
-            }
+        Section sTabs = new Section("首页顶部标签", false, null, () -> {
+            int n = 0;
+            for (CheckBox cb : cbTabs) if (cb != null && cb.isChecked()) n++;
+            return n == 0 ? "全部显示" : "隐藏 " + n + " 个";
         });
-        lv.addView(etLiveFmt);
-        tvLiveFmtPreview = tv("", 14, cText, false);
-        tvLiveFmtPreview.setPadding(dp(4), dp(10), 0, 0);
-        lv.addView(tvLiveFmtPreview);
-        lv.addView(divider());
-        lv.addView(tv("字号", 17, cText, true));
-        TextView lzd = tv("8～40 sp，默认 14。", 13, cSub, false);
-        lzd.setPadding(0, dp(2), 0, dp(12));
-        lv.addView(lzd);
-        liveSizeF = new SizeField(14);
-        liveSizeF.changed = this::updateLivePreview;
-        lv.addView(liveSizeF.build());
-        lv.addView(divider());
-        lv.addView(tv("颜色", 17, cText, true));
-        TextView lcd = tv("点「选色」挑一个颜色；文字自带一圈黑边，亮背景上也看得清。", 13, cSub, false);
-        lcd.setPadding(0, dp(2), 0, dp(12));
-        lv.addView(lcd);
-        liveColorF = new ColorField("默认（白色）", "选择开播时间颜色");
-        liveColorF.changed = this::updateLivePreview;
-        lv.addView(liveColorF.build());
-        lv.addView(divider());
-        lv.addView(tv("位置", 17, cText, true));
-        TextView lpd = tv("拖两个滑块，下面的小屏幕里实时看文字放在哪。0% = 最左 / 最上，100% = 最右 / 最下，文字始终完整显示在直播页面里，所以直播间里的任何位置都放得到。", 13, cSub, false);
-        lpd.setPadding(0, dp(2), 0, dp(8));
-        lv.addView(lpd);
-        tvLiveX = tv("", 15, cText, false);
-        lv.addView(tvLiveX);
-        sbLiveX = posBar();
-        lv.addView(sbLiveX, new LinearLayout.LayoutParams(-1, -2));
-        tvLiveY = tv("", 15, cText, false);
-        tvLiveY.setPadding(0, dp(8), 0, 0);
-        lv.addView(tvLiveY);
-        sbLiveY = posBar();
-        lv.addView(sbLiveY, new LinearLayout.LayoutParams(-1, -2));
-        livePreview = new PosPreview(this);
-        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(160), dp(320));
-        plp.gravity = Gravity.CENTER_HORIZONTAL;
-        plp.topMargin = dp(12);
-        lv.addView(livePreview, plp);
-        root.addView(lv, cardLp());
-
-        // ---- 视频文案样式
-        root.addView(section("视频文案样式"));
-        LinearLayout cp = card();
-        swCapOutline = new Switch(this);
-        cp.addView(switchRow("视频文案加黑色描边", "给视频下方的文案（标题、话题）加一圈黑边，亮背景上也看得清。关掉后要重启抖音才恢复", swCapOutline));
-        cp.addView(divider());
-        cp.addView(tv("文案颜色", 17, cText, true));
-        TextView cpd = tv("点「选色」从色表里挑一个颜色；话题、@ 这类抖音自己上色的文字不变。选「不改」就用抖音原来的颜色（选过颜色再改回「不改」，要重启抖音才恢复）。", 13, cSub, false);
-        cpd.setPadding(0, dp(2), 0, dp(12));
-        cp.addView(cpd);
-        capColorF = new ColorField("不改（抖音原来的颜色）", "选择文案颜色");
-        cp.addView(capColorF.build());
-        root.addView(cp, cardLp());
-
-        // ---- 首页顶部标签
-        root.addView(section("首页顶部标签"));
-        LinearLayout tabs = card();
-        tabs.addView(tv("勾选的标签会被隐藏", 17, cText, true));
-        TextView tbd = tv("追踪（抖音 40.7.0）里，这台手机当前显示的是：推荐、关注、热点、同城、商城；其余 8 个在标签行里存在但抖音没有启用，哪天启用了才会出现。取消勾选后要重启抖音才恢复；只隐藏标签，左右划动仍会翻到它的页面。", 13, cSub, false);
-        tbd.setPadding(0, dp(2), 0, dp(10));
-        tabs.addView(tbd);
+        sTabs.body.addView(note("勾选的标签会被隐藏；取消勾选后要重启抖音才恢复。只隐藏标签，左右划动仍会翻到它的页面。追踪（抖音 40.7.0）里这台手机当前显示的是：推荐、关注、热点、同城、商城，其余 8 个抖音没有启用，哪天启用了才会出现。"));
         for (int r = 0; r < TAB_LABELS.length; r += 3) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
@@ -328,40 +249,46 @@ public class MainActivity extends Activity {
                     cb.setText(TAB_LABELS[i]);
                     cb.setTextSize(15);
                     cb.setTextColor(cText);
+                    cb.setOnCheckedChangeListener((b, on) -> refreshSummaries());
                     cbTabs[i] = cb;
                     row.addView(cb, new LinearLayout.LayoutParams(0, -2, 1f));
                 } else {
                     row.addView(new View(this), new LinearLayout.LayoutParams(0, 0, 1f));
                 }
             }
-            tabs.addView(row);
+            sTabs.body.addView(row);
         }
-        root.addView(tabs, cardLp());
+        root.addView(sTabs.box, cardLp());
 
-        // ---- 无操作自动退出
-        root.addView(section("无操作自动退出"));
-        LinearLayout idle = card();
-        idle.addView(tv("无操作多少分钟后结束抖音", 17, cText, true));
-        TextView idd = tv("连续这么多分钟没有触摸、按键，也没有回到前台，就结束抖音进程（后台也计时）。回到前台算一次操作，重新开始。填 0 = 关闭。", 13, cSub, false);
-        idd.setPadding(0, dp(2), 0, dp(10));
-        idle.addView(idd);
         etIdle = field();
         etIdle.setInputType(InputType.TYPE_CLASS_NUMBER);
         etIdle.setHint("分钟，0 = 关闭");
-        idle.addView(etIdle);
-        root.addView(idle, cardLp());
+        watch(etIdle);
+        Section sIdle = new Section("无操作自动退出", false, null, () -> {
+            String t = etIdle.getText().toString().trim();
+            return t.isEmpty() || t.equals("0") ? "已关闭" : t + " 分钟无操作后退出";
+        });
+        sIdle.body.addView(note("连续这么多分钟没有触摸、按键，也没有回到前台，就结束抖音进程（后台也计时）。回到前台算一次操作，重新开始。填 0 = 关闭。"));
+        sIdle.body.addView(etIdle);
+        root.addView(sIdle.box, cardLp());
 
-        // ---- 钩子状态
-        root.addView(section("钩子状态"));
-        LinearLayout hk = card();
-        TextView hd = tv("抖音更新后，模块会自己按特征重新找钩子，找不到的会放弃并记住（同一个版本不再反复尝试）。点下面的按钮用 root 读取每个钩子是否可用。", 13, cSub, false);
-        hd.setPadding(0, 0, 0, dp(12));
-        hk.addView(hd);
+        // ================= 高级
+        root.addView(groupLabel("高级"));
+
+        etPkg = field();
+        watch(etPkg);
+        Section sAdv = new Section("目标 App 与钩子状态", false, null, () -> "包名 " + etPkg.getText().toString().trim());
+        sAdv.body.addView(sub("包名"));
+        sAdv.body.addView(note("要作用的 App，多个包名用逗号分隔，默认是抖音。"));
+        sAdv.body.addView(etPkg);
+        sAdv.body.addView(divider());
+        sAdv.body.addView(sub("钩子状态"));
+        sAdv.body.addView(note("抖音更新后，模块会自己按特征重新找钩子，找不到的会放弃并记住（同一个版本不再反复尝试）。点下面的按钮用 root 读取每个钩子是否可用。"));
         btnHooks = pillButton("检查钩子状态", false);
         btnHooks.setTextSize(16);
         btnHooks.setOnClickListener(v -> checkHooks());
-        hk.addView(btnHooks, new LinearLayout.LayoutParams(-1, dp(48)));
-        root.addView(hk, cardLp());
+        sAdv.body.addView(btnHooks, new LinearLayout.LayoutParams(-1, dp(48)));
+        root.addView(sAdv.box, cardLp());
 
         // ---- 状态（有内容才显示）
         statusCard = new LinearLayout(this);
@@ -372,9 +299,218 @@ public class MainActivity extends Activity {
         tvStatus.setTextIsSelectable(true);
         statusCard.addView(tvStatus);
         statusCard.setVisibility(View.GONE);
-        root.addView(statusCard, cardLp());
+        LinearLayout.LayoutParams slp = cardLp();
+        slp.topMargin = dp(8);
+        root.addView(statusCard, slp);
 
         load();
+        ready = true;
+        refreshSummaries();
+    }
+
+    // ------------------------------------------------------------ 折叠分组
+
+    /** 顶层分组：展开一个，其他自动收起（手风琴）。 */
+    private final ArrayList<Section> sections = new ArrayList<>();
+    /** 所有分组（含子分组）：刷新摘要用。 */
+    private final ArrayList<Section> allSections = new ArrayList<>();
+    /** 控件都建好、load() 做完之后才刷新摘要。 */
+    private boolean ready;
+
+    /**
+     * 折叠分组：标题 + 一行摘要（开没开、关键数值）+ 可选的总开关 + 箭头。点标题行展开 / 收起；总开关在标题行里，不用展开就能开关。
+     * nested = true 是分组里面的子分组（灰底、不参与手风琴）。内容往 body 里加。
+     */
+    private final class Section {
+        final LinearLayout box, body;
+        final TextView tvSum, chev;
+        final boolean nested;
+        final Supplier<String> sum;
+        boolean open;
+
+        Section(String title, boolean nested, Switch master, Supplier<String> sum) {
+            this.nested = nested;
+            this.sum = sum;
+            box = new LinearLayout(MainActivity.this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            if (nested) {
+                box.setPadding(dp(14), dp(10), dp(14), dp(10));
+                box.setBackground(round(cField, 0, 14));
+            } else {
+                box.setPadding(dp(20), dp(12), dp(16), dp(12));
+                box.setBackground(round(cCard, cStroke, 22));
+            }
+            LinearLayout head = new LinearLayout(MainActivity.this);
+            head.setOrientation(LinearLayout.HORIZONTAL);
+            head.setGravity(Gravity.CENTER_VERTICAL);
+            head.setMinimumHeight(dp(nested ? 40 : 52));
+            LinearLayout txt = new LinearLayout(MainActivity.this);
+            txt.setOrientation(LinearLayout.VERTICAL);
+            txt.addView(tv(title, nested ? 15 : 17, cText, true));
+            tvSum = tv("", nested ? 12 : 13, cSub, false);
+            tvSum.setSingleLine(true);
+            tvSum.setEllipsize(TextUtils.TruncateAt.END);
+            tvSum.setPadding(0, dp(2), 0, 0);
+            txt.addView(tvSum);
+            head.addView(txt, new LinearLayout.LayoutParams(0, -2, 1f));
+            if (master != null) {
+                styleSwitch(master);
+                LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(-2, -2);
+                ml.leftMargin = dp(8);
+                head.addView(master, ml);
+            }
+            chev = tv("▾", 18, cSub, true);
+            chev.setGravity(Gravity.CENTER);
+            head.addView(chev, new LinearLayout.LayoutParams(dp(32), dp(32)));
+            head.setOnClickListener(v -> setOpen(!open, true));
+            box.addView(head, new LinearLayout.LayoutParams(-1, -2));
+            body = new LinearLayout(MainActivity.this);
+            body.setOrientation(LinearLayout.VERTICAL);
+            body.setPadding(0, dp(10), nested ? 0 : dp(4), dp(4));
+            body.setVisibility(View.GONE);
+            box.addView(body, new LinearLayout.LayoutParams(-1, -2));
+            allSections.add(this);
+            if (!nested) sections.add(this);
+        }
+
+        void setOpen(boolean o, boolean scrollTo) {
+            if (o == open) return;
+            open = o;
+            body.setVisibility(o ? View.VISIBLE : View.GONE);
+            chev.setText(o ? "▴" : "▾");
+            if (o && !nested) {
+                for (Section s : sections) if (s != this && s.open) s.setOpen(false, false);
+                if (scrollTo) scrollToView(box);
+            }
+        }
+
+        void refresh() {
+            String s;
+            try {
+                s = sum == null ? null : sum.get();
+            } catch (Throwable t) {
+                s = null;
+            }
+            tvSum.setText(s == null ? "" : s);
+            tvSum.setVisibility(s == null || s.isEmpty() ? View.GONE : View.VISIBLE);
+        }
+    }
+
+    private void refreshSummaries() {
+        if (!ready) return;
+        for (Section s : allSections) s.refresh();
+    }
+
+    /** 等这一轮布局做完（别的分组收起后位置会变）再把这个分组滚到顶部附近。 */
+    private void scrollToView(final View v) {
+        v.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
+            @Override
+            public void onGlobalLayout() {
+                v.getViewTreeObserver().removeOnGlobalLayoutListener(this);
+                scroll.smoothScrollTo(0, Math.max(0, v.getTop() - dp(12)));
+            }
+        });
+    }
+
+    private static String oneLine(String s) {
+        return s.replace("\n", " ↵ ");
+    }
+
+    /** 输入框内容变了 → 刷新摘要。 */
+    private void watch(EditText e) {
+        e.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence cs, int a, int b, int c) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence cs, int a, int b, int c) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable ed) {
+                refreshSummaries();
+            }
+        });
+    }
+
+    /** 分组里一行说明（小灰字）。 */
+    private TextView note(String s) {
+        TextView t = tv(s, 13, cSub, false);
+        t.setPadding(0, 0, 0, dp(10));
+        return t;
+    }
+
+    /** 分组里一个小标题（「字号」「颜色」……）。 */
+    private TextView sub(String s) {
+        TextView t = tv(s, 14, cText, true);
+        t.setPadding(0, dp(14), 0, dp(6));
+        return t;
+    }
+
+    private LinearLayout.LayoutParams nestLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.topMargin = dp(4);
+        lp.bottomMargin = dp(4);
+        return lp;
+    }
+
+    // ------------------------------------------------------------ 位置：去抖音里调
+
+    private void updateLivePos() {
+        if (tvLivePos != null) tvLivePos.setText("水平 " + liveX + "%  ·  垂直 " + liveY + "%");
+        refreshSummaries();
+    }
+
+    /** 保存并应用当前设置（带上「位置调节模式」），成功后打开抖音；位置在抖音的直播间里用浮窗拖。 */
+    private void adjustLivePos() {
+        final String pkgs = etPkg.getText().toString().trim();
+        final List<String> list = DanmakuConfig.split(pkgs);
+        if (list.isEmpty()) {
+            showStatus("请先在「高级」里填目标包名", 2);
+            return;
+        }
+        DanmakuConfig c = read();
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("cfg", c.toText()).putString("pkg", pkgs).apply();
+        c.liveAdjust = true; // 只推给抖音；设置页自己存的配置里没有这一项
+        push(list, c.toText(), true);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (etPkg != null && getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("adj", false)) syncAdjust();
+    }
+
+    /** 从抖音那边读回浮窗里调好的位置（用 root 读抖音自己的配置文件）。 */
+    private void syncAdjust() {
+        final List<String> list = DanmakuConfig.split(etPkg.getText().toString().trim());
+        if (list.isEmpty()) return;
+        final String pkg = list.get(0);
+        new Thread(() -> {
+            final String text = RootShell.readConfig(pkg);
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (text == null) {
+                    showStatus("没读到抖音里调好的位置（没 root，或抖音还没运行过）。位置还是上次保存的：水平 " + liveX + "% · 垂直 " + liveY + "%", 2);
+                    return;
+                }
+                DanmakuConfig got = DanmakuConfig.fromText(text);
+                if (got.liveAdjust) {
+                    showStatus("抖音里的位置浮窗还没点「完成」或「取消」。进直播间调好、点完成后，再回到这里。", 0);
+                    return;
+                }
+                liveX = got.liveX;
+                liveY = got.liveY;
+                updateLivePos();
+                SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+                DanmakuConfig mine = DanmakuConfig.fromText(sp.getString("cfg", ""));
+                mine.liveX = liveX;
+                mine.liveY = liveY;
+                sp.edit().putString("cfg", mine.toText()).putBoolean("adj", false).apply();
+                showStatus("已同步抖音里的位置：水平 " + liveX + "% · 垂直 " + liveY + "%", 1);
+            });
+        }).start();
     }
 
     // ------------------------------------------------------------ 读写配置
@@ -408,9 +544,9 @@ public class MainActivity extends Activity {
         etLiveFmt.setText(c.liveFormat);
         liveSizeF.set(c.liveSize);
         liveColorF.set(c.liveColor);
-        sbLiveX.setProgress(c.liveX);
-        sbLiveY.setProgress(c.liveY);
-        updateLivePreview();
+        liveX = c.liveX;
+        liveY = c.liveY;
+        updateLivePos();
     }
 
     private DanmakuConfig read() {
@@ -434,8 +570,8 @@ public class MainActivity extends Activity {
         c.liveFormat = lft.trim().isEmpty() ? LiveFormat.DEFAULT : lft;
         c.liveSize = liveSizeF.v;
         c.liveColor = liveColorF.color;
-        c.liveX = sbLiveX.getProgress();
-        c.liveY = sbLiveY.getProgress();
+        c.liveX = liveX; // 位置只在抖音里用浮窗调，这里原样带着
+        c.liveY = liveY;
         java.util.ArrayList<String> hid = new java.util.ArrayList<>();
         for (int i = 0; i < TAB_LABELS.length; i++) if (cbTabs[i].isChecked()) hid.add(TAB_LABELS[i]);
         c.hiddenTabs = hid.toArray(new String[0]);
@@ -453,10 +589,17 @@ public class MainActivity extends Activity {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("cfg", cfgText).putString("pkg", pkgs).apply();
         final List<String> list = DanmakuConfig.split(pkgs);
         if (list.isEmpty()) {
-            showStatus("请先填目标包名", 2);
+            showStatus("请先在「高级」里填目标包名", 2);
             return;
         }
-        setBusy(btnPush, true, "正在推送…");
+        push(list, cfgText, false);
+    }
+
+    /** 用 root 把配置推给每个包；launch = true 时全部成功后打开第一个包（抖音），并记下「在等抖音里调好位置」。 */
+    private void push(final List<String> list, final String cfgText, final boolean launch) {
+        final TextView busyBtn = launch ? btnAdjust : btnPush;
+        final String idle = launch ? "去抖音里调整" : "保存并应用";
+        setBusy(busyBtn, true, "正在推送…");
         showStatus("正在推送…（首次会弹出 root 授权，请允许）", 0);
         new Thread(() -> {
             final StringBuilder sb = new StringBuilder();
@@ -470,11 +613,23 @@ public class MainActivity extends Activity {
                 else if (r.out.contains("__NOPKG__")) sb.append("✗ ").append(pkg).append("：").append(RootShell.nopkgMsg(r.out)).append('\n');
                 else sb.append("✗ ").append(pkg).append("：失败(").append(r.code).append(") ").append(r.err.trim()).append('\n');
             }
-            sb.append("\n抖音回到前台就生效，不用重启。抖音清除数据/重装后需要重新推送（不推送则用默认：开启+鲜艳）。");
+            final boolean ok = sb.indexOf("✗") < 0;
+            if (launch) sb.append("\n进入直播间后，在屏幕上拖动文字，点浮窗里的「完成」；回到这里会自动同步新位置。");
+            else sb.append("\n抖音回到前台就生效，不用重启。抖音清除数据/重装后需要重新推送（不推送则用默认：开启+鲜艳）。");
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
-                setBusy(btnPush, false, "保存并应用");
-                showStatus(sb.toString(), sb.indexOf("✗") >= 0 ? 2 : 1);
+                setBusy(busyBtn, false, idle);
+                showStatus(sb.toString(), ok ? 1 : 2);
+                if (launch && ok) {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("adj", true).apply();
+                    Intent it = getPackageManager().getLaunchIntentForPackage(list.get(0));
+                    if (it != null) {
+                        it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(it);
+                    } else {
+                        showStatus(sb + "\n没找到可以打开的 " + list.get(0) + "，请手动打开抖音进直播间。", 2);
+                    }
+                }
             });
         }).start();
     }
@@ -555,91 +710,6 @@ public class MainActivity extends Activity {
         return b.toString().trim();
     }
 
-    // ------------------------------------------------------------ 直播间开播时间：位置滑块 + 预览
-
-    /** 0～100 的位置滑块；拖动时刷新两行文字和预览。 */
-    private SeekBar posBar() {
-        SeekBar sb = new SeekBar(this);
-        sb.setMax(100);
-        sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
-                updateLivePreview();
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar bar) {
-            }
-
-            @Override
-            public void onStopTrackingTouch(SeekBar bar) {
-            }
-        });
-        return sb;
-    }
-
-    /** 模板预览文字 + 位置文字 + 小屏幕预览一起刷新（控件还没建好时什么都不做）。 */
-    private void updateLivePreview() {
-        if (etLiveFmt == null || sbLiveX == null || sbLiveY == null || liveSizeF == null || liveColorF == null
-                || livePreview == null || tvLiveX == null || tvLiveY == null || tvLiveFmtPreview == null) return;
-        String text = LiveFormat.render(etLiveFmt.getText().toString(), PREVIEW_SEC);
-        tvLiveFmtPreview.setText(text == null ? "（没有内容）" : "预览：" + text);
-        tvLiveX.setText("水平位置 " + sbLiveX.getProgress() + "%");
-        tvLiveY.setText("垂直位置 " + sbLiveY.getProgress() + "%");
-        livePreview.update(text == null ? "" : text, sbLiveX.getProgress(), sbLiveY.getProgress(), liveSizeF.v, liveColorF.color);
-    }
-
-    /** 一块缩小的手机屏幕（深色底，像直播画面），文字按和抖音里同一个公式放：左 = (宽 − 文字宽) × x%，上 = (高 − 文字高) × y%。 */
-    private final class PosPreview extends View {
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private String text = "";
-        private int px = 3, py = 10, size = 14, color = 0;
-
-        PosPreview(Context c) {
-            super(c);
-        }
-
-        void update(String text, int x, int y, int size, int color) {
-            this.text = text;
-            px = x;
-            py = y;
-            this.size = size;
-            this.color = color;
-            invalidate();
-        }
-
-        @Override
-        protected void onDraw(Canvas cv) {
-            int w = getWidth(), h = getHeight();
-            if (w <= 0 || h <= 0) return;
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(0xFF1B1D24);
-            cv.drawRoundRect(0, 0, w, h, dp(14), dp(14), paint);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(dp(1));
-            paint.setColor(cStroke);
-            cv.drawRoundRect(0, 0, w, h, dp(14), dp(14), paint);
-            if (text.isEmpty()) return;
-            // 小屏幕相当于 360dp 宽的手机：字号按宽度比例缩小
-            float textPx = size * w / 360f;
-            paint.setStyle(Paint.Style.FILL);
-            paint.setTextSize(textPx);
-            paint.setColor(color != 0 ? color : 0xFFFFFFFF);
-            paint.setShadowLayer(Math.max(1f, textPx * 0.2f), 0f, 0f, 0xFF000000);
-            String[] lines = text.split("\n", -1);
-            float lh = paint.getFontMetrics().descent - paint.getFontMetrics().ascent;
-            float tw = 0f;
-            for (String ln : lines) tw = Math.max(tw, paint.measureText(ln));
-            float th = lh * lines.length;
-            float left = Math.max(0f, (w - tw) * px / 100f);
-            float top = Math.max(0f, (h - th) * py / 100f);
-            for (int i = 0; i < lines.length; i++) {
-                cv.drawText(lines[i], left, top + lh * i - paint.getFontMetrics().ascent, paint);
-            }
-            paint.clearShadowLayer();
-        }
-    }
-
     // ------------------------------------------------------------ 字号 / 颜色（时长、发布信息、文案共用）
 
     /** 色表：6 列 × 4 行，名字 + 不透明 RGB。 */
@@ -697,6 +767,7 @@ public class MainActivity extends Activity {
         void set(int n) {
             v = Math.max(DanmakuConfig.SIZE_MIN, Math.min(DanmakuConfig.SIZE_MAX, n));
             show();
+            refreshSummaries();
             if (changed != null) changed.run();
         }
 
@@ -738,6 +809,7 @@ public class MainActivity extends Activity {
         void set(int c) {
             color = c;
             show();
+            refreshSummaries();
             if (changed != null) changed.run();
         }
 
@@ -1021,9 +1093,7 @@ public class MainActivity extends Activity {
     }
 
     private void updatePubPreview() {
-        if (tvPubPreview == null) return;
-        String s = PubFormat.render(toTemplate(), PREVIEW_SEC, "广西", "南宁");
-        tvPubPreview.setText("预览：" + (s == null ? "（空，不显示）" : s));
+        refreshSummaries(); // 预览在「显示内容和顺序」分组的摘要里
     }
 
     // ------------------------------------------------------------ 状态卡片 / 忙碌态
@@ -1113,13 +1183,13 @@ public class MainActivity extends Activity {
 
     private LinearLayout.LayoutParams cardLp() {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.bottomMargin = dp(4);
+        lp.bottomMargin = dp(8);
         return lp;
     }
 
-    private TextView section(String s) {
-        TextView t = tv(s, 14, cSub, true);
-        t.setPadding(dp(6), dp(20), 0, dp(8));
+    private TextView groupLabel(String s) {
+        TextView t = tv(s, 13, cSub, true);
+        t.setPadding(dp(6), dp(18), 0, dp(8));
         return t;
     }
 
@@ -1156,35 +1226,18 @@ public class MainActivity extends Activity {
         d.setPadding(0, dp(2), 0, 0);
         txt.addView(d);
         row.addView(txt, new LinearLayout.LayoutParams(0, -2, 1f));
-        int[][] st = {{android.R.attr.state_checked}, {}};
-        sw.setThumbTintList(new ColorStateList(st, new int[]{cPrimary, dark ? 0xFF8A90A0 : 0xFFFFFFFF}));
-        sw.setTrackTintList(new ColorStateList(st, new int[]{dark ? 0xFF35417A : 0xFFC5CFFA, dark ? 0xFF3A3F4D : 0xFFD5D8E2}));
+        styleSwitch(sw);
         row.addView(sw);
         row.setOnClickListener(v -> sw.toggle());
         return row;
     }
 
-    private LinearLayout step(int n, String title, String desc) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(0, 0, 0, dp(14));
-        TextView num = tv(String.valueOf(n), 15, cPrimary, true);
-        num.setGravity(Gravity.CENTER);
-        GradientDrawable circle = new GradientDrawable();
-        circle.setShape(GradientDrawable.OVAL);
-        circle.setColor(cPrimarySoft);
-        num.setBackground(circle);
-        row.addView(num, new LinearLayout.LayoutParams(dp(36), dp(36)));
-        LinearLayout txt = new LinearLayout(this);
-        txt.setOrientation(LinearLayout.VERTICAL);
-        txt.addView(tv(title, 17, cText, true));
-        TextView d = tv(desc, 13, cSub, false);
-        d.setPadding(0, dp(2), 0, 0);
-        txt.addView(d);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
-        lp.leftMargin = dp(14);
-        row.addView(txt, lp);
-        return row;
+    /** 开关配色，并且开关一变就刷新分组摘要。 */
+    private void styleSwitch(Switch sw) {
+        int[][] st = {{android.R.attr.state_checked}, {}};
+        sw.setThumbTintList(new ColorStateList(st, new int[]{cPrimary, dark ? 0xFF8A90A0 : 0xFFFFFFFF}));
+        sw.setTrackTintList(new ColorStateList(st, new int[]{dark ? 0xFF35417A : 0xFFC5CFFA, dark ? 0xFF3A3F4D : 0xFFD5D8E2}));
+        sw.setOnCheckedChangeListener((b, on) -> refreshSummaries());
     }
 
     /** 分段按钮：点哪个选哪个，用 segIndex 读当前选中的序号。 */
@@ -1200,7 +1253,10 @@ public class MainActivity extends Activity {
             t.setTextSize(15);
             t.setGravity(Gravity.CENTER);
             t.setPadding(dp(8), dp(11), dp(8), dp(11));
-            t.setOnClickListener(v -> setSeg(seg, idx));
+            t.setOnClickListener(v -> {
+                setSeg(seg, idx);
+                refreshSummaries();
+            });
             seg.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
         }
         setSeg(seg, 0);
