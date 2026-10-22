@@ -63,6 +63,9 @@ public class MainActivity extends Activity {
     private ColorField liveColorF;
     private int liveX = 3, liveY = 10;
     private PctField bgF;
+    /** 发布日期地点行、视频时长行的位置偏移（dp）：不在设置页调，在抖音里用位置浮窗调，这里只存 / 显示。 */
+    private int pubDx, pubDy, timeDx, timeDy;
+    private final ArrayList<TextView> vidPosTvs = new ArrayList<>();
     private TextView tvLivePos, btnAdjust;
     private TextView tvStatus, btnPush, btnHooks;
     private ScrollView scroll;
@@ -129,6 +132,7 @@ public class MainActivity extends Activity {
         sTime.body.addView(timeSizeF.build());
         sTime.body.addView(sub("颜色"));
         sTime.body.addView(timeColorF.build());
+        sTime.body.addView(vidPosRow());
         root.addView(sTime.box, cardLp());
 
         swPub = new Switch(this);
@@ -175,6 +179,7 @@ public class MainActivity extends Activity {
         sPub.body.addView(pubSizeF.build());
         sPub.body.addView(sub("颜色"));
         sPub.body.addView(pubColorF.build());
+        sPub.body.addView(vidPosRow());
         root.addView(sPub.box, cardLp());
 
         bgF = new PctField(40);
@@ -489,7 +494,48 @@ public class MainActivity extends Activity {
         DanmakuConfig c = read();
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("cfg", c.toText()).putString("pkg", pkgs).apply();
         c.liveAdjust = true; // 只推给抖音；设置页自己存的配置里没有这一项
-        push(list, c.toText(), true);
+        push(list, c.toText(), btnAdjust, "去抖音里调整", "\n进入直播间后，在屏幕上拖动文字，点浮窗里的「完成」；回到这里会自动同步新位置。");
+    }
+
+    /** 发布日期地点、视频时长共用的「位置」一行：当前偏移 + 「去抖音里调整」按钮（要先打开对应的开关，那一行才看得到）。 */
+    private View vidPosRow() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(sub("位置"));
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        TextView t = tv("", 14, cText, false);
+        vidPosTvs.add(t);
+        row.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+        final TextView b = pillButton("去抖音里调整", true);
+        b.setTextSize(15);
+        b.setOnClickListener(v -> adjustVid(b));
+        row.addView(b, new LinearLayout.LayoutParams(dp(136), dp(48)));
+        box.addView(row);
+        TextView n = note("发布地和时长可以分别调：在抖音里先选一项，再在屏幕上拖动，点浮窗里的「完成」。要先打开上面的开关，那一行才看得到。");
+        n.setPadding(0, dp(8), 0, 0);
+        box.addView(n);
+        return box;
+    }
+
+    private void updateVidPos() {
+        String s = "发布地 " + pubDx + "," + pubDy + " dp\n时长 " + timeDx + "," + timeDy + " dp";
+        for (TextView t : vidPosTvs) t.setText(s);
+    }
+
+    /** 保存并应用当前设置（带上「视频文字位置调节模式」），成功后打开抖音。 */
+    private void adjustVid(TextView btn) {
+        final String pkgs = etPkg.getText().toString().trim();
+        final List<String> list = DanmakuConfig.split(pkgs);
+        if (list.isEmpty()) {
+            showStatus("请先在「高级」里填目标包名", 2);
+            return;
+        }
+        DanmakuConfig c = read();
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("cfg", c.toText()).putString("pkg", pkgs).apply();
+        c.vidAdjust = true;
+        push(list, c.toText(), btn, "去抖音里调整", "\n在抖音的视频页里，先选「发布地」或「时长」，在屏幕上拖动，点浮窗里的「完成」；回到这里会自动同步新位置。");
     }
 
     @Override
@@ -512,19 +558,28 @@ public class MainActivity extends Activity {
                     return;
                 }
                 DanmakuConfig got = DanmakuConfig.fromText(text);
-                if (got.liveAdjust) {
-                    showStatus("抖音里的位置浮窗还没点「完成」或「取消」。进直播间调好、点完成后，再回到这里。", 0);
+                if (got.liveAdjust || got.vidAdjust) {
+                    showStatus("抖音里的位置浮窗还没点「完成」或「取消」。调好、点完成后，再回到这里。", 0);
                     return;
                 }
                 liveX = got.liveX;
                 liveY = got.liveY;
+                pubDx = got.pubDx;
+                pubDy = got.pubDy;
+                timeDx = got.timeDx;
+                timeDy = got.timeDy;
                 updateLivePos();
+                updateVidPos();
                 SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
                 DanmakuConfig mine = DanmakuConfig.fromText(sp.getString("cfg", ""));
                 mine.liveX = liveX;
                 mine.liveY = liveY;
+                mine.pubDx = pubDx;
+                mine.pubDy = pubDy;
+                mine.timeDx = timeDx;
+                mine.timeDy = timeDy;
                 sp.edit().putString("cfg", mine.toText()).putBoolean("adj", false).apply();
-                showStatus("已同步抖音里的位置：水平 " + liveX + "% · 垂直 " + liveY + "%", 1);
+                showStatus("已同步抖音里调好的位置（直播 " + liveX + "% / " + liveY + "%；发布地 " + pubDx + "," + pubDy + " dp；时长 " + timeDx + "," + timeDy + " dp）", 1);
             });
         }).start();
     }
@@ -564,6 +619,11 @@ public class MainActivity extends Activity {
         liveY = c.liveY;
         updateLivePos();
         bgF.set(c.lineBg);
+        pubDx = c.pubDx;
+        pubDy = c.pubDy;
+        timeDx = c.timeDx;
+        timeDy = c.timeDy;
+        updateVidPos();
     }
 
     private DanmakuConfig read() {
@@ -588,6 +648,10 @@ public class MainActivity extends Activity {
         c.liveSize = liveSizeF.v;
         c.liveColor = liveColorF.color;
         c.lineBg = bgF.v;
+        c.pubDx = pubDx; // 位置只在抖音里用浮窗调，这里原样带着
+        c.pubDy = pubDy;
+        c.timeDx = timeDx;
+        c.timeDy = timeDy;
         c.liveX = liveX; // 位置只在抖音里用浮窗调，这里原样带着
         c.liveY = liveY;
         java.util.ArrayList<String> hid = new java.util.ArrayList<>();
@@ -610,13 +674,14 @@ public class MainActivity extends Activity {
             showStatus("请先在「高级」里填目标包名", 2);
             return;
         }
-        push(list, cfgText, false);
+        push(list, cfgText, null, null, null);
     }
 
     /** 用 root 把配置推给每个包；launch = true 时全部成功后打开第一个包（抖音），并记下「在等抖音里调好位置」。 */
-    private void push(final List<String> list, final String cfgText, final boolean launch) {
-        final TextView busyBtn = launch ? btnAdjust : btnPush;
-        final String idle = launch ? "去抖音里调整" : "保存并应用";
+    private void push(final List<String> list, final String cfgText, final TextView launchBtn, final String launchIdle, final String launchTail) {
+        final boolean launch = launchBtn != null;
+        final TextView busyBtn = launch ? launchBtn : btnPush;
+        final String idle = launch ? launchIdle : "保存并应用";
         setBusy(busyBtn, true, "正在推送…");
         showStatus("正在推送…（首次会弹出 root 授权，请允许）", 0);
         new Thread(() -> {
@@ -632,7 +697,7 @@ public class MainActivity extends Activity {
                 else sb.append("✗ ").append(pkg).append("：失败(").append(r.code).append(") ").append(r.err.trim()).append('\n');
             }
             final boolean ok = sb.indexOf("✗") < 0;
-            if (launch) sb.append("\n进入直播间后，在屏幕上拖动文字，点浮窗里的「完成」；回到这里会自动同步新位置。");
+            if (launch) sb.append(launchTail);
             else sb.append("\n抖音回到前台就生效，不用重启。抖音清除数据/重装后需要重新推送（不推送则用默认：开启+鲜艳）。");
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
