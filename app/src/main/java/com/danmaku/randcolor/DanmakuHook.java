@@ -114,7 +114,6 @@ final class DanmakuHook {
                         if (!(p.thisObject instanceof Activity)) return;
                         Activity a = (Activity) p.thisObject;
                         CommentHook.top = new WeakReference<>(a);
-                        TimeHook.onResume(a);
                         PubHook.onResume(a);
                         LiveHook.onResume();
                         IdleExit.onResume();
