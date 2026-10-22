@@ -577,6 +577,8 @@ final class PubHook {
         if (!line.contentEquals(row.getText())) row.setText(line);
         if (row.getVisibility() != View.VISIBLE) row.setVisibility(View.VISIBLE);
         row.invalidate(); // 灰色底透明度可能变了
+        float dx = c.pubDx * row.getResources().getDisplayMetrics().density; // 不等布局事件，划到这个视频时马上就在对的位置
+        if (row.getTranslationX() != dx) row.setTranslationX(dx);
     }
 
     /** 新建发布信息这一行：一圈黑边；左边距和文案对齐，宽度按文字、放不下就换行，不截断。 */
@@ -606,11 +608,22 @@ final class PubHook {
         intro.addOnLayoutChangeListener(GAP_LISTENER);
     }
 
-    /** 位置浮窗里偏移变了：当前视频的容器重新排一遍。 */
+    /**
+     * 位置浮窗里偏移变了：所有见过的容器都重新排一遍。
+     * 发布信息行是每个视频页（容器）各一个，偏移是平移（translationX），平移只在容器布局时才会重新算；
+     * 以前只重排当前视频的容器，邻近页的发布信息行还停在旧偏移上，划过去就是「别的视频位置不对」。
+     * 时长行只有一个、在容器间搬来搬去，所以不受这个影响。
+     */
     static void reapplyOffsets() {
         try {
-            ViewGroup intro = curIntro.get();
-            if (intro != null) closeGaps(intro);
+            for (int i = INTROS.size() - 1; i >= 0; i--) {
+                ViewGroup g = INTROS.get(i).get();
+                if (g == null) {
+                    INTROS.remove(i);
+                    continue;
+                }
+                if (g.isAttachedToWindow()) closeGaps(g);
+            }
         } catch (Throwable ignored) {
         }
     }
@@ -851,6 +864,8 @@ final class PubHook {
             t.setTextColor(color);
         }
         t.invalidate(); // 灰色底透明度可能变了
+        float dx = c.timeDx * t.getResources().getDisplayMetrics().density;
+        if (t.getTranslationX() != dx) t.setTranslationX(dx);
         return t;
     }
 
