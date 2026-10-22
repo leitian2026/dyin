@@ -16,14 +16,12 @@ import de.robv.android.xposed.XC_MethodHook;
 /**
  * 把"点赞"改成"打开评论"。两个入口，各有开关，每个入口只钩一个方法：
  *  1) 右侧爱心按钮（likeBtnToComment）：拦掉 FeedDiggPresenter#LJJJJJL，改为点一下评论按钮。
- *  2) 双击视频（dtapToComment）：拦掉 BaseListFragmentPanel#LLLIILIL(MotionEvent)，改为点一下评论按钮。
+ *  2) 双击视频（dtapToComment）：在 MonitorScrollFrameLayout.onInterceptTouchEvent 里识别双击并拦住（dtap.seen + dtap.cut），改为点一下评论按钮；
+ *     再用 dtap.click 跳过随后的单击处理（不暂停）。三个钩子的类名、方法名都没混淆。
  *
- * 为什么钩 LLLIILIL：TextRec 的追踪（40.7.0）显示，一次双击里，抖音的触摸监听 X.06y9.onTouch 只调用它一次，
- * 红心（FullFeedFragmentPanel.LLLIIIL → BaseListFragmentPanel.LLLIIIL → DiggLayout.LIZJ）和点赞（LiveData → observeVM$2.LIZ → X.1DAj → LJJLIIIJL）
- * 都从它往下走，次数 1:1。在这个入口直接跳过，下游的红心、点赞都不会发生，不需要时间窗，也不需要再拦下游方法。
- *
- * 双击还有一条名字没混淆的路径（1.20.0，dtap.seen + dtap.cut），在 LLLIILIL 之前生效；它拦住了，LLLIILIL 就不会被走到。
- * 它没挂上（类找不到 / 方法没匹配 / 抖音改了监听器）时安静失效，仍由上面的 LLLIILIL 兜底。
+ * 1.26.4 起不再有混淆名的双击兜底（BaseListFragmentPanel#LLLIILIL）：它在前面这条路径失效时照样能打开评论，
+ * 会把「前面的钩子到底有没有用」盖住，设置页里钩子状态再好看也不知道是不是真的在起作用。
+ * 现在这条路径失效 = 双击恢复成点赞，一眼就能看出来。（LLLIILIL 的追踪证据：40.7.0 里一次双击 X.06y9.onTouch 只调它一次，红心和点赞都从它往下走。）
  *
  * 评论按钮的找法：contentDescription 形如"评论24，按钮"、可见面积最大的那个。
  * 找不到评论按钮时：按钮点赞照常放行；双击则不放行（双击不点赞）。
@@ -36,9 +34,6 @@ final class CommentHook {
     private static final String DIGG = "com.ss.android.ugc.aweme.feed.quick.presenter.FeedDiggPresenter";
     /** 版本相关：40.7.0 里右侧爱心按钮 onClick 调到的方法。换版本后需要重新记录。 */
     private static final String DIGG_CLICK_METHOD = "LJJJJJL";
-    /** 版本相关：40.7.0 里双击的统一入口，void LLLIILIL(MotionEvent)，由 X.06y9.onTouch 调用。 */
-    private static final String PANEL = "com.ss.android.ugc.aweme.feed.panel.BaseListFragmentPanel";
-    private static final String PANEL_DTAP_METHOD = "LLLIILIL";
     /**
      * 双击的稳定名路径（40.7.0，TextRec：textrec-tasks-20261020-203447 / 20261021-032906 / 20261021-093511）：
      *  - 双击在 MonitorScrollFrameLayout.onInterceptTouchEvent 里被识别：第二下 DOWN 时它的栈是
@@ -81,7 +76,6 @@ final class CommentHook {
     /** 主线程上的触摸分发：正在 MonitorScrollFrameLayout.onInterceptTouchEvent 里 / 这一次里 onDoubleTap 被调到了。 */
     private static boolean inIntercept, dtapSeen;
 
-    private static final XC_MethodHook DTAP_HOOK = new DtapHook();
     private static final XC_MethodHook DIGG_HOOK = new DiggHook();
     private static final XC_MethodHook SEEN_HOOK = new DtapSeenHook();
     private static final XC_MethodHook CUT_HOOK = new DtapCutHook();
@@ -99,8 +93,6 @@ final class CommentHook {
                 "MonitorScrollFrameLayout 里没有 onInterceptTouchEvent(MotionEvent)（抖音改了这个类，需要用 TextRec 重新追踪双击时的触摸分发）", cl);
         HookGuard.hook(HookGuard.DTAP_CLICK, FEED_ROOT, voidNamed(CLICK_METHOD), CLICK_HOOK,
                 "FeedComponentsRoot 里没有 void handleSingleClick（抖音改了单击处理，需要用 TextRec 重新追踪单击暂停的调用栈）", cl);
-        HookGuard.hook(HookGuard.DTAP, PANEL, motion(PANEL_DTAP_METHOD), DTAP_HOOK,
-                PANEL_DTAP_METHOD + "(MotionEvent) 在 BaseListFragmentPanel 里没有找到（方法名是混淆的，抖音更新后会变，需要重新追踪）", cl);
         HookGuard.hook(HookGuard.DIGG, DIGG, HookGuard.named(DIGG_CLICK_METHOD), DIGG_HOOK,
                 DIGG_CLICK_METHOD + " 在 FeedDiggPresenter 里没有找到（方法名是混淆的，抖音更新后会变，需要重新追踪）", cl);
     }
@@ -127,24 +119,6 @@ final class CommentHook {
         };
     }
 
-    /** 双击：跳过抖音的双击处理（红心和点赞都在它下面），改为打开评论。找不到评论按钮也不放行：双击不点赞。 */
-    private static final class DtapHook extends XC_MethodHook {
-        @Override
-        protected void beforeHookedMethod(MethodHookParam p) {
-            try {
-                if (!DanmakuHook.cfg.dtapToComment) return;
-                long now = SystemClock.uptimeMillis();
-                dtapAt = now;
-                if (now - lastOpenAt >= REOPEN_GAP_MS) {
-                    lastOpenAt = now;
-                    openComments();
-                }
-                p.setResult(defaultOf(((Method) p.method).getReturnType()));
-            } catch (Throwable ignored) {
-            }
-        }
-    }
-
     /** onDoubleTap 被调到：只在 MonitorScrollFrameLayout 的拦截判断里才算（别的手势检测器不理）。热路径：两次静态读写，不分配。 */
     private static final class DtapSeenHook extends XC_MethodHook {
         @Override
@@ -159,7 +133,7 @@ final class CommentHook {
     /**
      * MonitorScrollFrameLayout.onInterceptTouchEvent：进来时记下「正在拦截判断」，出来时如果这一次里识别到了双击，
      * 就把结果改成 true（子视图收不到这个 DOWN，LongPressLayout 里的红心和点赞都不会发生）并打开评论。
-     * 找不到评论按钮也照样拦：双击不点赞（和 LLLIILIL 那条一致）。
+     * 找不到评论按钮也照样拦：双击不点赞。
      */
     private static final class DtapCutHook extends XC_MethodHook {
         @Override
