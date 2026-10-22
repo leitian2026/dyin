@@ -175,7 +175,7 @@ final class PubHook {
                     placeAll(rs);
                     // bind 时容器还没挂进根里：根布局时（容器这时一般已经在了）补找一次，空白行和文案样式不用等第一个进度回调
                     DanmakuConfig c = DanmakuHook.cfg;
-                    if (rs.intro == null && rs.aid != null && (c.blankH > 0 || styleOn()) && ensureIntro(rs)) applyAll(rs);
+                    if (rs.intro == null && rs.aid != null && (c.blankH != 0 || styleOn()) && ensureIntro(rs)) applyAll(rs);
                 }
             } catch (Throwable ignored) {
             }
@@ -244,13 +244,7 @@ final class PubHook {
         }
         Field ip = stringField(aw, "ipAttribution");
         Field city = stringField(aw, "city");
-        Field dur = null;
-        try {
-            dur = aw.getDeclaredField("duration");
-            if (dur.getType() != long.class && dur.getType() != int.class) dur = null;
-        } catch (Throwable ignored) {
-            dur = null;
-        }
+        Field dur = durationField(aw);
         int n = 0;
         try {
             a.setAccessible(true);
@@ -283,6 +277,21 @@ final class PubHook {
         }
         if (n > 0) HookGuard.ok(HookGuard.PUB_BIND, ip == null ? "没有地点字段，只显示日期" : (city == null ? "没有城市字段，只显示到省" : (dur == null ? "没有 duration 字段，时长要等第一个进度回调才显示" : "")));
         else HookGuard.miss(HookGuard.PUB_BIND, "VideoViewHolder 里没有 bind(Aweme, …)（翻页绑定入口变了，需要重新追踪）");
+    }
+
+    /** Aweme.duration（毫秒，TextRec 快照 17857）：本类找不到就往父类找；long / int / Long / Integer 都收。 */
+    private static Field durationField(Class<?> aw) {
+        for (Class<?> k = aw; k != null && k != Object.class; k = k.getSuperclass()) {
+            try {
+                Field f = k.getDeclaredField("duration");
+                Class<?> t = f.getType();
+                return t == long.class || t == int.class || t == Long.class || t == Integer.class ? f : null;
+            } catch (NoSuchFieldException ignored) {
+            } catch (Throwable e) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private static Field stringField(Class<?> c, String name) {
@@ -356,7 +365,7 @@ final class PubHook {
             try {
                 if (!isMain() || p.thisObject == null || p.args == null || p.args.length == 0 || p.args[0] == null) return;
                 DanmakuConfig c = DanmakuHook.cfg;
-                if (!c.pubAlways && !c.timeAlways && !styleOn() && c.blankH <= 0) return; // 全关着（空白行也是 0）：回到前台时已经把现有的行藏起来了
+                if (!c.pubAlways && !c.timeAlways && !styleOn() && c.blankH == 0) return; // 全关着（空白行也是 0）：回到前台时已经把现有的行藏起来了
                 Field fa = fAid;
                 if (fa == null || fTime == null) return;
                 Object o = fa.get(p.args[0]);
@@ -379,7 +388,8 @@ final class PubHook {
         Field fi = fIp, fc = fCity, fd = fDur;
         Object ip = fi == null ? null : fi.get(aw);
         Object ct = fc == null ? null : fc.get(aw);
-        long dur = fd == null ? -1 : fd.getLong(aw);
+        Object dv = fd == null ? null : fd.get(aw);
+        long dur = dv instanceof Number ? ((Number) dv).longValue() : -1;
         return new Info(sec, ip instanceof String ? (String) ip : null, ct instanceof String ? (String) ct : null, dur);
     }
 
@@ -788,13 +798,16 @@ final class PubHook {
     }
 
     /**
-     * 空白行：高度 = blankH × 2 像素（0 = 不放，已经放了的拿掉）。纯 View，不画东西、不吃触摸。
+     * 空白行：高度 = blankH × 2 像素（-1 = 默认，等于 37 sp 的字高；0 = 不放，已经放了的拿掉）。纯 View，不画东西、不吃触摸。
      * 没有 LinearLayout 的容器（抖音改了）就不放，不硬塞。
      */
     private static void updateBlank(Rows r) {
         ViewGroup intro = r.intro;
         if (intro == null) return;
-        int h = Math.max(0, DanmakuHook.cfg.blankH) * 2;
+        int bh = DanmakuHook.cfg.blankH;
+        int h = bh < 0
+                ? Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, DanmakuConfig.BLANK_DEFAULT_SP, intro.getResources().getDisplayMetrics()))
+                : bh * 2;
         View v = r.blank;
         if (h == 0) {
             if (v != null) {
@@ -952,7 +965,7 @@ final class PubHook {
         WeakReference<Rows> w = PAGES.get(id);
         Rows r = w == null ? null : w.get();
         if (r == null) return;
-        if (r.intro == null && (c.blankH > 0 || styleOn()) && ensureIntro(r)) applyAll(r);
+        if (r.intro == null && (c.blankH != 0 || styleOn()) && ensureIntro(r)) applyAll(r);
         if (!c.timeAlways) return;
         long sec = pos > 0 ? pos / 1000 : 0;
         long dsec = dur > 0 ? dur / 1000 : -1;
