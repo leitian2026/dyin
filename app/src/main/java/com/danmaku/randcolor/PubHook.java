@@ -606,6 +606,15 @@ final class PubHook {
         intro.addOnLayoutChangeListener(GAP_LISTENER);
     }
 
+    /** 位置浮窗里偏移变了：当前视频的容器重新排一遍。 */
+    static void reapplyOffsets() {
+        try {
+            ViewGroup intro = curIntro.get();
+            if (intro != null) closeGaps(intro);
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** v 的顶边在 intro 坐标里的位置（含平移）；v 不在 intro 里返回 NaN。 */
     private static float topIn(ViewGroup intro, View v) {
         float y = 0f;
@@ -642,7 +651,18 @@ final class PubHook {
             if (c instanceof LineBg.Row) {
                 if (c.getVisibility() == View.GONE) continue;
                 float t = Float.isNaN(prev) ? 0f : Math.min(0f, prev - (c.getTop() + c.getPaddingTop()));
-                if (c.getTranslationY() != t) c.setTranslationY(t);
+                float ux = 0f, uy = 0f; // 用户在位置浮窗里调的偏移（只影响这一行自己，不影响后面的行）
+                DanmakuConfig cf = DanmakuHook.cfg;
+                float d = c.getResources().getDisplayMetrics().density;
+                if (c == timeRef.get()) {
+                    ux = cf.timeDx * d;
+                    uy = cf.timeDy * d;
+                } else if (rs != null && c == rs.pub) {
+                    ux = cf.pubDx * d;
+                    uy = cf.pubDy * d;
+                }
+                if (c.getTranslationX() != ux) c.setTranslationX(ux);
+                if (c.getTranslationY() != t + uy) c.setTranslationY(t + uy);
                 prev = c.getBottom() - c.getPaddingBottom() + t;
                 shift = t;
                 seen = true;
@@ -1283,6 +1303,8 @@ final class PubHook {
             if (!isMain()) return;
             refreshCaption(a);
             refreshRows();
+            if (DanmakuHook.cfg.vidAdjust) VidPosPanel.show(a); // 位置调节模式：盖上浮窗
+            else VidPosPanel.end();
         } catch (Throwable ignored) {
         }
     }
