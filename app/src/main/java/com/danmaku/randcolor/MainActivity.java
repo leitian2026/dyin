@@ -17,6 +17,7 @@ import android.text.InputType;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.style.ForegroundColorSpan;
+import android.util.TypedValue;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.Gravity;
@@ -187,8 +188,8 @@ public class MainActivity extends Activity {
         place(sPub);
 
         blankF = new BlankField();
-        Section sBlank = new Section("文案下方空白行", false, null, () -> blankF.v == 0 ? "不留空白" : "高度 " + blankF.v * 2 + " px");
-        sBlank.body.addView(note("在视频文案下面（原来发布地那一行的位置）加一块空白，给你留出地方。每按一次 + 多 2 像素，− 少 2 像素；0 = 不留。划到下一个视频生效。"));
+        Section sBlank = new Section("文案下方空白行", false, null, () -> blankF.v < 0 ? "默认（" + DanmakuConfig.BLANK_DEFAULT_SP + " sp 高）" : blankF.v == 0 ? "不留空白" : "高度 " + blankF.v * 2 + " px");
+        sBlank.body.addView(note("在视频文案下面（原来发布地那一行的位置）加一块空白，给你留出地方。默认是 37 sp 字那么高；每按一次 + 多 2 像素，− 少 2 像素；0 = 不留；点中间的数字回到默认。划到下一个视频生效。"));
         sBlank.body.addView(settingRow("高度", blankF.build()));
         place(sBlank);
 
@@ -898,7 +899,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 空白行高度：「−  N  +」，每次 ±1（= ±2 像素），0～200。 */
+    /** 空白行高度：「−  N  +」，每次 ±1（= ±2 像素），0～200；-1 = 默认（37 sp 的字高），点中间的数字回到默认。 */
     private final class BlankField {
         int v;
         TextView label;
@@ -909,28 +910,34 @@ public class MainActivity extends Activity {
             r.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
             TextView minus = pillButton("−", false);
             minus.setTextSize(20);
-            minus.setOnClickListener(x -> set(v - 1));
+            minus.setOnClickListener(x -> set(v < 0 ? defSteps() - 1 : Math.max(0, v - 1)));
             r.addView(minus, new LinearLayout.LayoutParams(dp(44), dp(40)));
             label = tv("", 15, cText, true);
             label.setGravity(Gravity.CENTER);
             label.setMinWidth(dp(88));
+            label.setOnClickListener(x -> set(-1));
             r.addView(label, new LinearLayout.LayoutParams(-2, -2));
             TextView plus = pillButton("+", false);
             plus.setTextSize(20);
-            plus.setOnClickListener(x -> set(v + 1));
+            plus.setOnClickListener(x -> set((v < 0 ? defSteps() : v) + 1));
             r.addView(plus, new LinearLayout.LayoutParams(dp(44), dp(40)));
             show();
             return r;
         }
 
+        /** 默认高度（37 sp 的字高）对应的档位（每档 2 像素），从默认开始按 + / − 时以它为起点。 */
+        int defSteps() {
+            return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, DanmakuConfig.BLANK_DEFAULT_SP, getResources().getDisplayMetrics()) / 2f);
+        }
+
         void set(int n) {
-            v = Math.max(0, Math.min(200, n));
+            v = n < 0 ? -1 : Math.min(200, n);
             show();
             refreshSummaries();
         }
 
         void show() {
-            if (label != null) label.setText(v + " · " + v * 2 + " px");
+            if (label != null) label.setText(v < 0 ? "默认 · " + DanmakuConfig.BLANK_DEFAULT_SP + " sp" : v + " · " + v * 2 + " px");
         }
     }
 
