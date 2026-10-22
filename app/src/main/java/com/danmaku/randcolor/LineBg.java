@@ -1,7 +1,6 @@
 package com.danmaku.randcolor;
 
 import android.content.Context;
-import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -23,10 +22,8 @@ final class LineBg {
     private static final Paint PAINT = new Paint(Paint.ANTI_ALIAS_FLAG);
     private static final int GRAY = 0x00666666;
 
-    /** 底比字多出的边：1sp。模糊边的半径：1.5sp。 */
-    private static final float BAR_SP = 1f, BLUR_SP = 1.5f;
-    private static BlurMaskFilter blur;
-    private static float blurR;
+    /** 底比字多出的边：1sp。柔边向外再延伸 1.5sp（分 3 层逐层变淡）。 */
+    private static final float BAR_SP = 1f, SOFT_SP = 1.5f;
 
     /** 自己放的两行的内边距：3sp，给底和它的模糊边留地方（底只比字多 1sp，模糊边再往外一点）。PubHook 用它抵消行距 / 左边距。 */
     static int pad(Context c) {
@@ -49,14 +46,20 @@ final class LineBg {
             if (rt <= lf) continue; // 空行不画
             PATH.addRoundRect(ox + lf - pad, oy + l.getLineTop(i) - pad, ox + rt + pad, oy + l.getLineBottom(i) + pad, pad * 2f, pad * 2f, Path.Direction.CW);
         }
-        float br = BLUR_SP * sd;
-        if (blur == null || blurR != br) { // 半径只随屏幕密度变，几乎不会重建
-            blur = new BlurMaskFilter(br, BlurMaskFilter.Blur.NORMAL);
-            blurR = br;
+        int a = Math.min(100, pct) * 255 / 100;
+        // 柔边：不用 BlurMaskFilter（硬件绘制下这台机器上画不出来）。先在底的外面画 3 圈逐层变淡的描边（只画在底的外侧），再画底本身。
+        cv.save();
+        cv.clipOutPath(PATH);
+        PAINT.setStyle(Paint.Style.STROKE);
+        PAINT.setStrokeJoin(Paint.Join.ROUND);
+        for (int k = 3; k >= 1; k--) {
+            PAINT.setStrokeWidth(2f * SOFT_SP * sd * k / 3f);
+            PAINT.setColor(GRAY | (a / 4) << 24);
+            cv.drawPath(PATH, PAINT);
         }
-        PAINT.setMaskFilter(blur); // 模糊边
+        cv.restore();
         PAINT.setStyle(Paint.Style.FILL);
-        PAINT.setColor(GRAY | (Math.min(100, pct) * 255 / 100) << 24);
+        PAINT.setColor(GRAY | a << 24);
         cv.drawPath(PATH, PAINT);
     }
 
