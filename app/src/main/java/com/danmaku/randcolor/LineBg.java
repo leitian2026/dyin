@@ -1,6 +1,7 @@
 package com.danmaku.randcolor;
 
 import android.content.Context;
+import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -22,9 +23,14 @@ final class LineBg {
     private static final Paint PAINT = new Paint(Paint.ANTI_ALIAS_FLAG);
     private static final int GRAY = 0x00666666;
 
-    /** 底比字多出的边：1sp（像素）。 */
+    /** 底比字多出的边：1sp。模糊边的半径：1.5sp。 */
+    private static final float BAR_SP = 1f, BLUR_SP = 1.5f;
+    private static BlurMaskFilter blur;
+    private static float blurR;
+
+    /** 自己放的两行的内边距：3sp，给底和它的模糊边留地方（底只比字多 1sp，模糊边再往外一点）。PubHook 用它抵消行距 / 左边距。 */
     static int pad(Context c) {
-        return Math.round(c.getResources().getDisplayMetrics().scaledDensity);
+        return Math.round(3f * c.getResources().getDisplayMetrics().scaledDensity);
     }
 
     /** 在 cv 上给 t 的每一行文字画底。t 还没排好版（没有 Layout）或 pct <= 0 就什么都不画。 */
@@ -34,7 +40,8 @@ final class LineBg {
         if (l == null) return;
         int n = l.getLineCount();
         if (n <= 0) return;
-        float pad = t.getResources().getDisplayMetrics().scaledDensity;
+        float sd = t.getResources().getDisplayMetrics().scaledDensity;
+        float pad = BAR_SP * sd;
         float ox = t.getTotalPaddingLeft(), oy = t.getTotalPaddingTop();
         PATH.rewind();
         for (int i = 0; i < n; i++) {
@@ -42,6 +49,12 @@ final class LineBg {
             if (rt <= lf) continue; // 空行不画
             PATH.addRoundRect(ox + lf - pad, oy + l.getLineTop(i) - pad, ox + rt + pad, oy + l.getLineBottom(i) + pad, pad * 2f, pad * 2f, Path.Direction.CW);
         }
+        float br = BLUR_SP * sd;
+        if (blur == null || blurR != br) { // 半径只随屏幕密度变，几乎不会重建
+            blur = new BlurMaskFilter(br, BlurMaskFilter.Blur.NORMAL);
+            blurR = br;
+        }
+        PAINT.setMaskFilter(blur); // 模糊边
         PAINT.setStyle(Paint.Style.FILL);
         PAINT.setColor(GRAY | (Math.min(100, pct) * 255 / 100) << 24);
         cv.drawPath(PATH, PAINT);
@@ -53,6 +66,7 @@ final class LineBg {
             super(c);
             int p = pad(c);
             setPadding(p, p, p, p);
+            setIncludeFontPadding(false); // 行高 = 字本身的行高，和文案的行距一样
         }
 
         @Override
