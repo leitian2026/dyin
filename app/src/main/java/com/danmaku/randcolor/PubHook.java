@@ -47,11 +47,10 @@ import de.robv.android.xposed.XposedBridge;
  *  - 播放器进度回调 onPlayProgressChange(id, 位置ms, 总时长ms) 的 id 就是 Aweme.aid（三个视频逐个相同，见旧版注释的记录）。
  *
  * 做法（1.28.0）：
- *  - bind（after）：取 Aweme 的发布时间 / 地点 / 总时长；按类型取这一页的根；往下找 AwemeIntroInfoLayout。
+ *  - bind（after）：取 Aweme 的发布时间 / 地点 / 总时长；按类型取这一页的根。容器不在 bind 里找（1.30.0 起，见下面「容器怎么来」）。
  *    ① 文案上顶（设置页「文案下方空白行」，配置键 blankH，0 = 不动，-1 = 默认 37 sp 高，其余每档 2 px）：把整个 AwemeIntroInfoLayout
  *       往上平移（translationY），作者声明、文案一起上移，下面留出空位给发布地和时长（两个浮层是浮在页面上的，本身不占位置）。
- *       钩子 pub.intro：AwemeIntroInfoLayout#onAttachedToWindow 的 after，this 就是这一页的容器（见 tryIntro）。不靠 bind 往下找、
- *       不靠文案 setText，每个页面的容器每次出现都会走到。不往容器里加 View（1.28.0 ～ 1.28.3 试过，没有效果）。
+ *       不往容器里加 View（1.28.0 ～ 1.28.3 试过，没有效果）。
  *    ② 发布信息、时长两个文字浮层直接盖在页面根（VideoViewHolderRootView）上，位置可以在全屏任意调（左 / 上，单位 dp，
  *       在抖音里用位置浮窗拖）；不再放进容器、也不再有行距 / 平移的逻辑。每页的根各带一份，换视频就是同一页再 bind 一次，覆盖就行。
  *       页面根的子控件都叠在 (0,0)、带 FrameLayout 才有的 gravity（视图树 lp[matchxmatch 重力17]），按 FrameLayout 往里加；加在最后一个，
@@ -59,10 +58,17 @@ import de.robv.android.xposed.XposedBridge;
  *    aid → 这一页的 Rows 登记在 PAGES 里，进度回调按 id 找页面。
  *  - 进度回调：按 id 找到页面，更新这一页的时长文字。没有「当前视频」「划走」的概念：划走的页面本来就在屏幕外。
  *
+ * 容器怎么来（1.30.0）：只有一个入口——文案控件。TextRec 40.7.0 的记录（普通视频 / 短剧 / 图集三类 holder）：
+ *  - 文案控件 ScrollMentionTextView（id=desc）由 FeedDescModule 在所有信息流页面里创建，它的 setText 每次 bind 都会走，类名、方法名都没混淆；
+ *  - 1.29.x 以前容器有两个找法（AwemeIntroInfoLayout#onAttachedToWindow 回调、从页面根往下找 8 层），文案却已经在 setText 里顺着父级认出了容器
+ *    （insideIntro）然后丢掉；图文帖上文案有灰色底、容器却没被接手（没上顶、发布地不在文案下方），两个找法都没走通。
+ *  现在：文案 setText → 沿父级找到 AwemeIntroInfoLayout → 往上找 VideoViewHolderRootView 登记这一页 → 接手容器（上顶 + 文案下方位置）。
+ *  不依赖 holder 是哪个子类、页面根怎么嵌套、回调先后。没有 TextRec 记录的是首页推荐里的图文帖（从历史记录打开显示正常，没抓到）。
+ *
  * 文案样式（描边 / 改色 / 灰色底，钩子 pub.text / pub.anchor / cap.draw）和发布信息、时长互不相干，只共用页面容器（空白行也在里面）：
  *  - pub.anchor：只找文案控件的两个类（ScrollMentionTextView 和 MentionTextView，类名没混淆，TextRec 40.7.0 的 SETTEXT / 绘制栈记录）；
  *  - pub.text：DmtTextView#setText(CharSequence, BufferType) 的 after；文案控件（上面两个类、并且在 AwemeIntroInfoLayout 里面，
- *    不再靠文字对 desc）每次设文字就重设一次样式；
+ *    不再靠文字对 desc）每次设文字：第一次认出时接手它的容器（上顶 / 文案下方位置），再重设一次样式；
  *  - cap.draw：MentionTextView#onDraw 前后临时换 mCurTextColor、画灰色底（依据见 DrawHook）。
  *  - 页面 bind 时也给这一页的文案控件设一次样式，回到前台时给所有见过的页面重设一次（设置改了马上生效）。
  *
@@ -178,11 +184,7 @@ final class PubHook {
                 if (o instanceof Rows) {
                     Rows rs = (Rows) o;
                     boolean same = l == ol && t == ot && r == or && b == ob;
-                    if (same && (rs.intro != null || rs.aid == null)) return; // 尺寸没变、也没有要补找的：什么都不做（加 / 拿浮层也会让根重新布局一次）
-                    if (!same) placeAll(rs);
-                    // bind 时容器还没挂进根里：根布局时（容器这时一般已经在了）补找一次，空白行和文案样式不用等第一个进度回调
-                    DanmakuConfig c = DanmakuHook.cfg;
-                    if (rs.intro == null && rs.aid != null && (styleOn() || c.blankH != 0 || c.barOn) && ensureIntro(rs)) applyAll(rs);
+                    if (!same) placeAll(rs); // 尺寸没变什么都不做（加 / 拿浮层也会让根重新布局一次）
                 }
             } catch (Throwable ignored) {
             }
@@ -224,7 +226,6 @@ final class PubHook {
         tryAnchor(cl, ctx);
         tryText(cl, ctx);
         tryDraw(cl, ctx);
-        tryIntro(cl, ctx);
     }
 
     /**
@@ -339,7 +340,7 @@ final class PubHook {
      */
     private static void tryText(ClassLoader cl, ClassLoader ctx) {
         if (HookGuard.settled(HookGuard.PUB)) return;
-        if (!styleOn()) return; // 文案样式全关：不挂这个通用文字控件的钩子（没有结论，设置里打开样式后回到前台再挂）
+        if (!capHookOn()) return; // 文案样式、上顶、文案下方位置全关：不挂这个通用文字控件的钩子（没有结论，设置里打开后回到前台再挂）
         HookGuard.hook(HookGuard.PUB, DMT, SET_TEXT, TEXT_HOOK,
                 "DmtTextView 里没有 setText(CharSequence, BufferType)（文案控件的设置方法变了，需要重新追踪）", cl, ctx);
     }
@@ -411,7 +412,10 @@ final class PubHook {
         return new Info(sec, ip instanceof String ? (String) ip : null, ct instanceof String ? (String) ct : null, dur);
     }
 
-    /** 文案控件刚设了文字：是视频文案（在 AwemeIntroInfoLayout 里面）就重设一次样式。其他 MentionTextView（评论等）不动。 */
+    /**
+     * 文案控件刚设了文字：是视频文案（在 AwemeIntroInfoLayout 里面）就接手它的容器（第一次认出时），再重设一次样式。
+     * 其他 MentionTextView（评论等）不动。
+     */
     private static final class TextHook extends XC_MethodHook {
         @Override
         protected void afterHookedMethod(MethodHookParam p) {
@@ -420,13 +424,15 @@ final class PubHook {
                 if (!(self instanceof TextView)) return;
                 Class<?> sk = self.getClass();
                 if (sk != capMention && sk != captionCls) return;
-                if (!styleOn() || !isMain()) return;
+                if (!capHookOn() || !isMain()) return;
                 TextView t = (TextView) self;
                 if (t.getTag(CAP_TAG) == null) {
-                    if (!insideIntro(t)) return;
+                    ViewGroup intro = introOf(t);
+                    if (intro == null) return;
                     markCaption(t);
+                    takeIntro(intro);
                 }
-                styleCaption(t);
+                if (styleOn()) styleCaption(t);
             } catch (Throwable ignored) {
             }
         }
@@ -525,20 +531,6 @@ final class PubHook {
         return r;
     }
 
-    /** 往下找 AwemeIntroInfoLayout（页面根下面 4 层，多找几层留余量）。 */
-    private static ViewGroup findIntro(View v, int depth) {
-        Class<?> ic = introCls;
-        if (ic == null) return null;
-        if (ic.isInstance(v)) return (ViewGroup) v;
-        if (depth <= 0 || !(v instanceof ViewGroup)) return null;
-        ViewGroup g = (ViewGroup) v;
-        for (int i = 0, n = g.getChildCount(); i < n; i++) {
-            ViewGroup f = findIntro(g.getChildAt(i), depth - 1);
-            if (f != null) return f;
-        }
-        return null;
-    }
-
     /** 往下找文案控件（两个类之一）。 */
     private static TextView findCap(View v, int depth) {
         Class<?> k = v.getClass();
@@ -552,28 +544,36 @@ final class PubHook {
         return null;
     }
 
-    /** t 在某个 AwemeIntroInfoLayout 里面（往上最多 8 层）。 */
-    private static boolean insideIntro(View t) {
+    /** t 所在的 AwemeIntroInfoLayout（往上最多 8 层）；不在任何容器里（评论等其他 MentionTextView）返回 null。 */
+    private static ViewGroup introOf(View t) {
         Class<?> ic = introCls;
-        if (ic == null) return false;
+        if (ic == null) return null;
         ViewParent par = t.getParent();
         for (int d = 0; d < 8 && par != null; d++) {
-            if (ic.isInstance(par)) return true;
+            if (ic.isInstance(par)) return (ViewGroup) par;
             par = par.getParent();
         }
-        return false;
+        return null;
     }
 
-    private static boolean under(View v, View root) {
-        ViewParent par = v.getParent();
-        for (int d = 0; d < 10 && par != null; d++) {
-            if (par == root) return true;
-            par = par.getParent();
+    /**
+     * 这个容器所在的页面：往上已经有登记的就用它，否则往上找最近的 VideoViewHolderRootView 登记一页（bind 随后会补上 aid / 发布信息）。
+     * 找不到根（类没找到、容器不在页面里）返回 null：上顶照常，文案下方位置算不出来就退回自由位置。
+     */
+    private static Rows rowsOfIntro(View intro) {
+        Rows r = rowsAbove(intro);
+        if (r != null) return r;
+        Class<?> rc = rootCls;
+        if (rc == null) return null;
+        ViewParent p = intro.getParent();
+        for (int d = 0; d < 30 && p != null; d++) {
+            if (rc.isInstance(p)) return rowsOfRoot((View) p);
+            p = p.getParent();
         }
-        return false;
+        return null;
     }
 
-    /** 这一页现在绑的是 aid：登记，找容器，套空白行、文案样式和两个浮层。 */
+    /** 这一页现在绑的是 aid：登记，套空白行、文案样式和两个浮层（容器由文案控件那边接手，见 takeIntro）。 */
     private static void bindPage(Rows r, String aid, Info info) {
         if (!aid.equals(r.aid)) {
             if (r.aid != null) {
@@ -588,7 +588,6 @@ final class PubHook {
             if (PAGES.size() > MAX_PAGES) trimPages();
         }
         register(r);
-        ensureIntro(r); // 容器还不在根里也往下走：浮层只要根；空白行和文案样式等第一个进度回调再补
         applyAll(r);
     }
 
@@ -607,17 +606,6 @@ final class PubHook {
         if (LIVE.size() > MAX_PAGES) {
             for (int i = LIVE.size() - 1; i >= 0; i--) if (LIVE.get(i).get() == null) LIVE.remove(i);
         }
-    }
-
-    /** 这一页的容器：已经有的还在根里就用它，否则往下找一次。找到了返回 true。 */
-    private static boolean ensureIntro(Rows r) {
-        if (r.intro != null && r.root != null && under(r.intro, r.root)) return true;
-        View root = r.root;
-        ViewGroup g = root == null ? null : findIntro(root, 8);
-        r.cap = null;
-        r.intro = g;
-        if (g != null) adopt(g); // 兜底入口：不靠 pub.intro 也能算上顶和文案下方的位置
-        return g != null;
     }
 
     /** 容器里的文案控件（找到过就用缓存的，没找到就再找；类没找到或容器里没有就是 null）。 */
@@ -778,6 +766,12 @@ final class PubHook {
         return c.capColor != 0 || c.lineBg > 0;
     }
 
+    /** 文案的 setText 钩子要不要挂：样式、上顶、文案下方位置，有一个开着就要（上顶和位置也靠它接手容器）。 */
+    private static boolean capHookOn() {
+        DanmakuConfig c = DanmakuHook.cfg;
+        return c.capColor != 0 || c.lineBg > 0 || c.blankH != 0 || c.barOn;
+    }
+
     /** 认出是视频文案：打 tag（cap.draw 只改打过 tag 的），挂一次布局监听（展开 / 收起让布局变了，重设样式）。 */
     private static void markCaption(TextView t) {
         t.setTag(CAP_TAG, Boolean.TRUE);
@@ -803,46 +797,8 @@ final class PubHook {
     private static final int MAX_INTROS = 16;
     /** 见过的 AwemeIntroInfoLayout（弱引用，主线程用）；每个视频页一个，邻近页的也在。回到前台时按新配置重套上顶高度。 */
     private static final ArrayList<WeakReference<ViewGroup>> INTROS = new ArrayList<>();
-    /** pub.intro 挂的是不是这个类的实例（挂的方法可能是父类的，按类过滤）。 */
-    private static volatile Class<?> introHookCls;
-
-    private static final XC_MethodHook INTRO_HOOK = new IntroHook();
-
     /**
-     * pub.intro：AwemeIntroInfoLayout 挂到窗口时（onAttachedToWindow，after）把这个容器按配置上移。
-     * 依据：TextRec 40.7.0 的追踪，每个视频页的这个容器每次出现都会走 onAttachedToWindow（冷启动 +1384，划一下 23028，在 bind 之后），
-     * 回调的 this 就是容器本身，不用找、不用等文案、不用等进度。方法可能不在这个类里声明（继承自父类），所以沿父类往上找第一个声明它的，
-     * 回调里按「是不是 AwemeIntroInfoLayout」过滤。
-     */
-    private static void tryIntro(ClassLoader cl, ClassLoader ctx) {
-        if (HookGuard.settled(HookGuard.PUB_INTRO)) return;
-        Class<?> ic = HookGuard.find(HookGuard.PUB_INTRO, INTRO, cl, ctx);
-        if (ic == null) return;
-        Method m = null;
-        try {
-            for (Class<?> k = ic; k != null && m == null; k = k.getSuperclass()) {
-                try {
-                    m = k.getDeclaredMethod("onAttachedToWindow");
-                } catch (NoSuchMethodException ignored) {
-                }
-            }
-            if (m == null) {
-                HookGuard.miss(HookGuard.PUB_INTRO, "AwemeIntroInfoLayout 往上没有 onAttachedToWindow（视图基类变了，需要重新追踪）");
-                return;
-            }
-            introHookCls = ic; // 类先放好再挂钩，回调一来就能用
-            XposedBridge.hookMethod(m, INTRO_HOOK);
-        } catch (Throwable e) {
-            HookGuard.waitFail(HookGuard.PUB_INTRO);
-            return;
-        }
-        HookGuard.ok(HookGuard.PUB_INTRO, m.getDeclaringClass() == ic ? "" : "挂在 " + m.getDeclaringClass().getSimpleName() + " 上，按类过滤");
-    }
-
-    /**
-     * 接手一个容器（上顶 + 文案下方位置）：第一次见就登记（回到前台按新配置重套）、挂布局监听，然后套一遍。
-     * 入口有两个：pub.intro（容器挂到窗口时）和「按页面根往下找到了容器」（bind 之后 / 根第一次布局，见 ensureIntro）；
-     * 后一个是兜底：有的页面（图文帖等）容器不走 onAttachedToWindow 回调，只靠 pub.intro 位置就一直算不出来。
+     * 接手一个容器（上顶 + 文案下方位置）：第一次见就登记（回到前台按新配置重套）、挂布局监听，然后套一遍。唯一入口是 takeIntro。
      */
     private static void adopt(ViewGroup intro) {
         if (intro.getTag(INTRO_TAG) == null) {
@@ -856,17 +812,10 @@ final class PubHook {
         applyBlank(intro);
     }
 
-    private static final class IntroHook extends XC_MethodHook {
-        @Override
-        protected void afterHookedMethod(MethodHookParam p) {
-            try {
-                Class<?> k = introHookCls;
-                Object o = p.thisObject;
-                if (k == null || !k.isInstance(o) || !isMain()) return;
-                adopt((ViewGroup) o);
-            } catch (Throwable ignored) {
-            }
-        }
+    /** 文案 → 容器：这一页没登记过就先按容器往上的页面根登记一页（算文案下方位置要用），然后接手容器。 */
+    private static void takeIntro(ViewGroup intro) {
+        if (intro.getTag(INTRO_TAG) == null) rowsOfIntro(intro);
+        adopt(intro);
     }
 
     /**
