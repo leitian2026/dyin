@@ -48,8 +48,10 @@ import de.robv.android.xposed.XposedBridge;
  *
  * 做法（1.28.0）：
  *  - bind（after）：取 Aweme 的发布时间 / 地点 / 总时长；按类型取这一页的根；往下找 AwemeIntroInfoLayout。
- *    ① 容器里只放一个「空白行」（纯 View，高度 = blankH × 2 像素，加 1 多 2px、减 1 少 2px，0 = 不放）：放在文案所在子控件的后面，
- *       也就是以前发布信息那一行的位置，给文案下面留出一块空白，用的还是这一个 pub.bind 钩子拿到的容器，没有新钩子。
+ *    ① 容器里只放一个「空白行」（纯 View，高度 = blankH × 2 像素，加 1 多 2px、减 1 少 2px，0 = 不放，-1 = 默认 37 sp 高）：放在文案所在子控件的后面，
+ *       也就是以前（1.26.1）发布信息那一行的位置，给文案下面留出一块空白。入口就是当年放发布信息行的那个：
+ *       pub.text（DmtTextView#setText 的 after），文案控件每次设文字，沿父级找 AwemeIntroInfoLayout（1.26.1 实测是竖直 LinearLayout），
+ *       在文案所在的直接子控件后面插入。不走 pub.bind 往下找容器那条路（bind 时容器还没挂进根里）；没有新钩子。
  *    ② 发布信息、时长两个文字浮层直接盖在页面根（VideoViewHolderRootView）上，位置可以在全屏任意调（左 / 上，单位 dp，
  *       在抖音里用位置浮窗拖）；不再放进容器、也不再有行距 / 平移的逻辑。每页的根各带一份，换视频就是同一页再 bind 一次，覆盖就行。
  *       页面根的子控件都叠在 (0,0)、带 FrameLayout 才有的 gravity（视图树 lp[matchxmatch 重力17]），按 FrameLayout 往里加；加在最后一个，
@@ -138,7 +140,6 @@ final class PubHook {
         View root;
         ViewGroup intro;     // 这一页的 AwemeIntroInfoLayout；bind 时还没找到就是 null
         TextView cap;        // 容器里的文案控件
-        View blank;          // 容器里的空白行（要显示时才建）
         TextView pub, time;  // 盖在页面根上的两个文字浮层（要显示时才建）
         String aid;          // 这一页现在绑的视频
         Info info;
@@ -175,7 +176,7 @@ final class PubHook {
                     placeAll(rs);
                     // bind 时容器还没挂进根里：根布局时（容器这时一般已经在了）补找一次，空白行和文案样式不用等第一个进度回调
                     DanmakuConfig c = DanmakuHook.cfg;
-                    if (rs.intro == null && rs.aid != null && (c.blankH != 0 || styleOn()) && ensureIntro(rs)) applyAll(rs);
+                    if (rs.intro == null && rs.aid != null && styleOn() && ensureIntro(rs)) applyAll(rs);
                 }
             } catch (Throwable ignored) {
             }
@@ -365,7 +366,7 @@ final class PubHook {
             try {
                 if (!isMain() || p.thisObject == null || p.args == null || p.args.length == 0 || p.args[0] == null) return;
                 DanmakuConfig c = DanmakuHook.cfg;
-                if (!c.pubAlways && !c.timeAlways && !styleOn() && c.blankH == 0) return; // 全关着（空白行也是 0）：回到前台时已经把现有的行藏起来了
+                if (!c.pubAlways && !c.timeAlways && !styleOn()) return; // 全关着：回到前台时已经把现有的行藏起来了
                 Field fa = fAid;
                 if (fa == null || fTime == null) return;
                 Object o = fa.get(p.args[0]);
@@ -402,13 +403,13 @@ final class PubHook {
                 if (!(self instanceof TextView)) return;
                 Class<?> sk = self.getClass();
                 if (sk != capMention && sk != captionCls) return;
-                if (!styleOn() || !isMain()) return;
+                if (!isMain()) return;
                 TextView t = (TextView) self;
-                if (t.getTag(CAP_TAG) == null) {
-                    if (!insideIntro(t)) return;
-                    markCaption(t);
+                if (styleOn() && (t.getTag(CAP_TAG) != null || insideIntro(t))) {
+                    if (t.getTag(CAP_TAG) == null) markCaption(t);
+                    styleCaption(t);
                 }
-                styleCaption(t);
+                onCaption(t); // 空白行：沿父级找容器，放 / 调 / 撤
             } catch (Throwable ignored) {
             }
         }
@@ -614,7 +615,6 @@ final class PubHook {
                 if (cap.getTag(CAP_TAG) == null) markCaption(cap);
                 styleCaption(cap);
             }
-            updateBlank(r);
         }
         updatePub(r);
         updateTimeInit(r);
@@ -631,6 +631,14 @@ final class PubHook {
                     continue;
                 }
                 applyAll(r);
+            }
+            for (int i = INTROS.size() - 1; i >= 0; i--) {
+                ViewGroup g = INTROS.get(i).get();
+                if (g == null) {
+                    INTROS.remove(i);
+                    continue;
+                }
+                applyBlank(g); // 空白行高度 / 开关变了：见过的容器按新配置重套
             }
             if (DanmakuHook.cfg.vidAdjust) VidPosPanel.show(a); // 位置调节模式：盖上浮窗
             else VidPosPanel.end();
@@ -781,44 +789,67 @@ final class PubHook {
         return null;
     }
 
-    /** 空白行放在哪个子控件后面：文案所在的那个直接子控件；找不到文案控件就放在容器里第一个不是空白行的子控件后面。 */
-    private static View anchorChild(Rows r) {
-        ViewGroup intro = r.intro;
-        if (intro == null) return null;
-        TextView cap = capOf(r);
-        if (cap != null) {
-            View c = childOf(intro, cap);
-            if (c != null) return c;
-        }
-        for (int i = 0, n = intro.getChildCount(); i < n; i++) {
-            View c = intro.getChildAt(i);
-            if (c != r.blank) return c;
+    /** 一个 AwemeIntroInfoLayout 上挂的东西：它的空白行 / 最近设过文字的文案控件（tag，主线程用）。 */
+    private static final int BLANK_TAG = 0x7e0b0c08, INTRO_CAP_TAG = 0x7e0b0c09;
+    private static final int MAX_INTROS = 16;
+    /** 见过的 AwemeIntroInfoLayout（弱引用，主线程用）；每个视频页一个，邻近页的也在。回到前台时按新配置重套空白行。 */
+    private static final ArrayList<WeakReference<ViewGroup>> INTROS = new ArrayList<>();
+
+    /** cap 往上（最多 8 层）找它所在的 AwemeIntroInfoLayout；找不到返回 null。 */
+    private static ViewGroup introOf(View cap) {
+        Class<?> ic = introCls;
+        if (ic == null) return null;
+        ViewParent par = cap.getParent();
+        for (int d = 0; d < 8 && par != null; d++) {
+            if (ic.isInstance(par)) return (ViewGroup) par;
+            par = par.getParent();
         }
         return null;
     }
 
     /**
-     * 空白行：高度 = blankH × 2 像素（-1 = 默认，等于 37 sp 的字高；0 = 不放，已经放了的拿掉）。纯 View，不画东西、不吃触摸。
-     * 没有 LinearLayout 的容器（抖音改了）就不放，不硬塞。
+     * 文案控件刚设了文字（pub.text 的 after，和 1.26.1 的发布信息那一行是同一个入口）：沿父级找到它所在的 AwemeIntroInfoLayout，
+     * 登记并记下这个文案控件，再按配置放 / 调 / 撤这个容器的空白行。
      */
-    private static void updateBlank(Rows r) {
-        ViewGroup intro = r.intro;
+    private static void onCaption(TextView cap) {
+        ViewGroup intro = introOf(cap);
         if (intro == null) return;
+        Object o = intro.getTag(INTRO_CAP_TAG);
+        if (o != cap) {
+            if (o == null) {
+                INTROS.add(new WeakReference<>(intro));
+                if (INTROS.size() > MAX_INTROS) {
+                    for (int i = INTROS.size() - 1; i >= 0; i--) if (INTROS.get(i).get() == null) INTROS.remove(i);
+                }
+            }
+            intro.setTag(INTRO_CAP_TAG, cap);
+        }
+        applyBlank(intro);
+    }
+
+    /**
+     * 空白行：高度 = blankH × 2 像素（-1 = 默认，等于 37 sp 的字高；0 = 不放，已经放了的拿掉）。纯 View，不画东西、不吃触摸。
+     * 放在文案所在的那个直接子控件后面（有作者声明时就在声明上方，没有就在声明本来的位置），已经放了的只调高度、不挪位置。
+     * 容器不是 LinearLayout（抖音改了）就不放，不硬塞。
+     */
+    private static void applyBlank(ViewGroup intro) {
         int bh = DanmakuHook.cfg.blankH;
-        int h = bh < 0
-                ? Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, DanmakuConfig.BLANK_DEFAULT_SP, intro.getResources().getDisplayMetrics()))
-                : bh * 2;
-        View v = r.blank;
-        if (h == 0) {
+        Object o = intro.getTag(BLANK_TAG);
+        View v = o instanceof View ? (View) o : null;
+        if (bh == 0) {
             if (v != null) {
                 detach(v);
-                r.blank = null;
+                intro.setTag(BLANK_TAG, null);
             }
             return;
         }
         if (!(intro instanceof LinearLayout)) return;
+        int h = bh < 0
+                ? Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, DanmakuConfig.BLANK_DEFAULT_SP, intro.getResources().getDisplayMetrics()))
+                : bh * 2;
         if (v == null || v.getParent() != intro) {
-            View anchor = anchorChild(r);
+            Object c = intro.getTag(INTRO_CAP_TAG);
+            View anchor = c instanceof View ? childOf(intro, (View) c) : null;
             if (anchor == null) return;
             detach(v);
             if (v == null) {
@@ -826,7 +857,7 @@ final class PubHook {
                 v.setClickable(false);
                 v.setFocusable(false);
                 v.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-                r.blank = v;
+                intro.setTag(BLANK_TAG, v);
             }
             intro.addView(v, intro.indexOfChild(anchor) + 1, new LinearLayout.LayoutParams(1, h));
             return;
@@ -965,7 +996,7 @@ final class PubHook {
         WeakReference<Rows> w = PAGES.get(id);
         Rows r = w == null ? null : w.get();
         if (r == null) return;
-        if (r.intro == null && (c.blankH != 0 || styleOn()) && ensureIntro(r)) applyAll(r);
+        if (r.intro == null && styleOn() && ensureIntro(r)) applyAll(r);
         if (!c.timeAlways) return;
         long sec = pos > 0 ? pos / 1000 : 0;
         long dsec = dur > 0 ? dur / 1000 : -1;
