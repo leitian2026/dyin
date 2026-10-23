@@ -802,7 +802,7 @@ final class PubHook {
     // ------------------------------------------------------------ 空白行（在容器里，文案后面）
 
     /** AwemeIntroInfoLayout 上挂的东西（tag，主线程用）：登记过 / 被我们上移过。 */
-    private static final int BLANK_TAG = 0x7e0b0c08, INTRO_TAG = 0x7e0b0c09, BARW_TAG = 0x7e0b0c0a;
+    private static final int BLANK_TAG = 0x7e0b0c08, INTRO_TAG = 0x7e0b0c09, CAPA_TAG = 0x7e0b0c0a;
     private static final int MAX_INTROS = 16;
     /** 见过的 AwemeIntroInfoLayout（弱引用，主线程用）；每个视频页一个，邻近页的也在。回到前台时按新配置重套上顶高度。 */
     private static final ArrayList<WeakReference<ViewGroup>> INTROS = new ArrayList<>();
@@ -924,6 +924,10 @@ final class PubHook {
         if (r == null) return;
         View root = r.root;
         if (root == null) return;
+        if (r.intro != intro) { // 这一页的容器就是它（pub.bind 时还没找到的补上）
+            r.intro = intro;
+            r.cap = null;
+        }
         boolean ok = intro.getWidth() > 0 && intro.getHeight() > 0;
         float x = 0f, y = 0f;
         if (ok) {
@@ -940,12 +944,43 @@ final class PubHook {
             }
         }
         y += intro.getHeight();
+        if (ok) { // 左边对齐文案的字：取文案控件文字的左边（在页面根里的位置），再减掉浮层自己的内边距；文案还没布局 / 找不到就用容器的左边
+            TextView cap = capOf(r);
+            if (cap != null && cap.getWidth() > 0) {
+                if (cap.getTag(CAPA_TAG) == null) { // 文案布局变了（展开 / 收起、换字）要重新对齐
+                    cap.setTag(CAPA_TAG, Boolean.TRUE);
+                    cap.addOnLayoutChangeListener(CAPA_LISTENER);
+                }
+                float cx = cap.getTotalPaddingLeft();
+                View v = cap;
+                while (v != root && v != null) {
+                    cx += v.getLeft() + v.getTranslationX();
+                    ViewParent p = v.getParent();
+                    v = p instanceof View ? (View) p : null;
+                }
+                if (v == root) x = cx;
+            }
+            x -= LineBg.pad(root.getContext());
+        }
         if (ok == r.slotOk && (!ok || (x == r.slotX && y == r.slotY))) return; // 没变
         r.slotOk = ok;
         r.slotX = x;
         r.slotY = y;
         placeAll(r);
     }
+
+    /** 文案布局变了：重新对齐文案下方的位置。 */
+    private static final View.OnLayoutChangeListener CAPA_LISTENER = new View.OnLayoutChangeListener() {
+        @Override
+        public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+            try {
+                if (l == ol && t == ot && r == or && b == ob) return;
+                Rows rs = rowsAbove(v);
+                if (rs != null && rs.intro != null) applyAnchor(rs.intro);
+            } catch (Throwable ignored) {
+            }
+        }
+    };
 
     /** 这个浮层是不是放在文案下方（开关开着、选中了它）。 */
     private static boolean anchored(DanmakuConfig c, boolean pub) {
