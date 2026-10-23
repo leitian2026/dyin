@@ -66,6 +66,7 @@ public class MainActivity extends Activity {
     private ColorField liveColorF;
     private int liveX = 3, liveY = 10;
     private PctField bgF, liftF;
+    private ColorField bgColorF;
     private BlankField blankF;
     private Switch swBar;
     private LinearLayout segBarSel;
@@ -198,9 +199,12 @@ public class MainActivity extends Activity {
 
         bgF = new PctField(70);
         liftF = new PctField(30);
+        bgColorF = new ColorField("默认（近黑）", "选择底色");
         Section sBg = new Section("文字灰色底", false, null, () -> (bgF.v == 0 ? "已关闭" : "不透明度 " + bgF.v + "%") + " · 字最低亮度 " + liftF.v + "%");
-        sBg.body.addView(note("给视频文案、视频时长、发布日期地点、弹幕、直播间开播时间的每一行字加一条黑色半透明底，底比字大一个字号（四周各多 1 sp）。0% = 不加。文案的底在文案控件边界处可能被裁掉一点。"));
+        sBg.body.addView(note("给视频文案、视频时长、发布日期地点、弹幕、直播间开播时间的每一行字加一条半透明底（颜色在下面的「底色」里选，默认近黑），底比字大一个字号（四周各多 1 sp）。0% = 不加。文案的底在文案控件边界处可能被裁掉一点。"));
         sBg.body.addView(settingRow("不透明度", bgF.build()));
+        sBg.body.addView(rowLine());
+        sBg.body.addView(bgColorF.row("底色"));
         sBg.body.addView(rowLine());
         sBg.body.addView(settingRow("弹幕字的最低亮度", liftF.build()));
         TextView liftNote = note("弹幕随机色里比这个亮度暗的颜色（蓝、紫、深红）会往白色提亮，100% = 全部接近白色，0% = 不提亮。只管弹幕随机色，自己选的文案 / 时长 / 开播时间颜色不动。");
@@ -653,6 +657,7 @@ public class MainActivity extends Activity {
         liveY = c.liveY;
         updateLivePos();
         bgF.set(c.lineBg);
+        bgColorF.set(c.lineBgColor);
         liftF.set(c.textLift);
         pubX = c.pubX;
         pubY = c.pubY;
@@ -684,6 +689,7 @@ public class MainActivity extends Activity {
         c.liveSize = liveSizeF.v;
         c.liveColor = liveColorF.color;
         c.lineBg = bgF.v;
+        c.lineBgColor = bgColorF.color;
         c.textLift = liftF.v;
         c.pubX = pubX; // 位置只在抖音里用浮窗调，这里原样带着
         c.pubY = pubY;
