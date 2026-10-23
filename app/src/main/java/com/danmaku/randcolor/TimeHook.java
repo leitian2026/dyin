@@ -30,6 +30,7 @@ final class TimeHook {
     /** 目标 App 的类加载器；启动时试一次，之后每次回到前台再试，直到有结论（挂上 / 放弃 / 不再重试，见 HookGuard）。 */
     static void tryHook(ClassLoader cl) {
         if (cl == null) return;
+        if (!DanmakuHook.cfg.timeAlways) return; // 视频时长没开：不挂这个每秒好几次的钩子（没有结论，打开后回到前台再挂）
         ClassLoader ctx = Thread.currentThread().getContextClassLoader();
         HookGuard.hook(HookGuard.TIME_PROGRESS, DELEGATE, HookGuard.named(PROGRESS), PROGRESS_HOOK,
                 "OnUIPlayListenerDelegate 里没有 " + PROGRESS + "（播放器监听接口变了，需要重新追踪）", cl, ctx);
