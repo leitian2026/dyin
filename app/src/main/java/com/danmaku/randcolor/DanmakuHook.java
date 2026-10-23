@@ -40,7 +40,7 @@ final class DanmakuHook {
 
     /**
      * 颜色缓存（直接映射，256 项）：键 = 弹幕对象的 identityHashCode，值 = 算好的颜色。
-     * 一个 long：高 32 位是键，低 32 位是 0x01000000 | (mode << 25) | RGB（0 表示空）。
+     * 一个 long：高 32 位是键，低 32 位是 0x01000000 | (mode << 25) | (最低亮度档 << 26) | RGB（0 表示空；亮度档 = textLift / 5，0～20，改了设置缓存自然失效）。
      * 弹幕滚动时每帧重绘同一条，命中缓存就不用再做哈希混合和 HSV→RGB。
      */
     private static final long[] CACHE = new long[256];
@@ -245,7 +245,7 @@ final class DanmakuHook {
                 long v = (Long) a[colorIdx];
                 if ((v & 0x3FL) != 0L) return; // 只处理 sRGB；Unspecified/其他色彩空间不碰
 
-                int rgb = colorOf(System.identityHashCode(p.thisObject), p.thisObject, c.mode);
+                int rgb = colorOf(System.identityHashCode(p.thisObject), p.thisObject, c.mode, c.textLift / 5);
                 int alpha = (int) ((v >>> 56) & 0xFF);           // 保留原透明度
                 int argb = (alpha << 24) | rgb;
                 int slot = lastSlot;
@@ -358,13 +358,15 @@ final class DanmakuHook {
 
     /** key = 对象身份，只用来当缓存键；真正决定颜色的是文字（读不到才用身份）。
      *  以前按对象身份定色，抖音重新测量会换新对象，颜色就跟着变，弹幕会闪几下。 */
-    private static int colorOf(int key, Object mp, int mode) {
+    private static int colorOf(int key, Object mp, int mode, int lift) {
+        if (lift < 0) lift = 0;
+        else if (lift > 20) lift = 20;
         int slot = (key ^ (key >>> 8)) & 255;
         lastSlot = slot;
         long e = CACHE[slot];
-        int tag = 0x01000000 | (mode << 25);
+        int tag = 0x01000000 | (mode << 25) | (lift << 26);
         if ((int) (e >>> 32) == key && ((int) e & 0xFF000000) == tag) return (int) e & 0xFFFFFF;
-        int rgb = pick(textKey(mp, key), mode);
+        int rgb = pick(textKey(mp, key), mode, lift);
         CACHE[slot] = ((long) key << 32) | (tag | rgb) & 0xFFFFFFFFL;
         return rgb;
     }
@@ -435,7 +437,7 @@ final class DanmakuHook {
     }
 
     /** 同一个 key（文字哈希）永远得到同一个颜色，所以弹幕滚动、被重新测量都不会闪。HSV→RGB 手算，不分配对象（每帧每条弹幕都会走到这里）。 */
-    private static int pick(int key, int mode) {
+    private static int pick(int key, int mode, int lift) {
         int m = mix(key);
         float h = ((m & 0xFFFF) % 360) / 60f;
         float s, v;
@@ -458,6 +460,6 @@ final class DanmakuHook {
             case 4: r = t; g = pp; b = v; break;
             default: r = v; g = pp; b = q; break;
         }
-        return LineBg.legible((Math.round(r * 255f) << 16) | (Math.round(g * 255f) << 8) | Math.round(b * 255f)); // 太暗的色（纯蓝等）提亮，黑底上才看得清
+        return LineBg.legible((Math.round(r * 255f) << 16) | (Math.round(g * 255f) << 8) | Math.round(b * 255f), lift * 0.05f); // 比用户设的最低亮度暗的色（纯蓝等）提亮
     }
 }
