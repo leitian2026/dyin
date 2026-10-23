@@ -8,7 +8,7 @@ import android.text.Layout;
 import android.widget.TextView;
 
 /**
- * 文字灰色底（1.25.0）：视频文案、视频时长、发布日期地点（1.29.0 起还有弹幕、直播间开播时间），每一行字后面画一条灰色底，透明度 lineBg（0～100%）在设置页调，0 = 不画。
+ * 文字灰色底（1.25.0）：视频文案、视频时长、发布日期地点（1.29.0 起还有弹幕、直播间开播时间），每一行字后面画一条黑色半透明底（类名里的「灰色」是旧叫法），透明度 lineBg（0～100%）在设置页调，0 = 不画。
  * 底 = 这一行的文字框向四周各放大 1sp（宽、高都比字大一个字号档），圆角；多行的底画成一个整体（Path 并集），重叠处不会变深。
  *
  * 画在文字之前：自己的两行（发布信息、时长）用 {@link Row}（TextView 子类，onDraw 先画底再 super）；
@@ -21,7 +21,28 @@ final class LineBg {
 
     private static final Path PATH = new Path();
     private static final Paint PAINT = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private static final int GRAY = 0x00666666;
+    /** 底的颜色：接近纯黑（1.29.1 起，原来是中灰 #666666）。所有用到灰色底的文字（现在的、以后加的）都走这一处，换色只改这里。 */
+    private static final int GRAY = 0x00101010;
+
+    /** 字色和黑底的对比度至少 4.5:1 所需的相对亮度（(L + 0.05) / 0.05 >= 4.5）。 */
+    private static final float MIN_LUM = 0.175f;
+
+    /**
+     * 以后新增的、由模块自己决定颜色的文字（像随机色的弹幕）：颜色过一遍这里，太暗的（纯蓝、深红等）往白色方向提亮到和黑底够对比为止，
+     * 够亮的原样返回。用户自己选的颜色（文案、时长、开播时间）不改。只处理 0xRRGGBB，不分配对象。
+     */
+    static int legible(int rgb) {
+        float r = ((rgb >> 16) & 255) / 255f, g = ((rgb >> 8) & 255) / 255f, b = (rgb & 255) / 255f;
+        float t = 0f;
+        while (t < 1f && 0.2126f * sq(r + (1f - r) * t) + 0.7152f * sq(g + (1f - g) * t) + 0.0722f * sq(b + (1f - b) * t) < MIN_LUM) t += 0.05f;
+        if (t <= 0f) return rgb;
+        if (t > 1f) t = 1f;
+        return (Math.round((r + (1f - r) * t) * 255f) << 16) | (Math.round((g + (1f - g) * t) * 255f) << 8) | Math.round((b + (1f - b) * t) * 255f);
+    }
+
+    private static float sq(float x) {
+        return x * x; // 近似 sRGB → 线性（gamma 2）
+    }
 
     /** 底比字多出的边：1sp。柔边向外再延伸 1.5sp（分 3 层逐层变淡）。 */
     private static final float BAR_SP = 1f, SOFT_SP = 1.5f;
