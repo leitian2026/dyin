@@ -141,7 +141,10 @@ final class PubHook {
         ViewGroup intro;     // 这一页的 AwemeIntroInfoLayout；bind 时还没找到就是 null
         TextView cap;        // 容器里的文案控件
         TextView pub, time;  // 盖在页面根上的两个文字浮层（要显示时才建）
-        View bar;            // 盖在页面根上的色条（blankH 不为 0 时才建）
+        View bar;            // 盖在页面根上的色条（要显示时才建）
+        int barCol;          // 色条现在设的颜色（没变就不再设）
+        int timeLen;         // 时长文字现在的字符数
+        boolean timeLocked;  // 时长浮层已经锁成固定大小（文字字符数不变时每秒换字不再重新布局）
         String aid;          // 这一页现在绑的视频
         Info info;
         long lastSec = -1, lastDsec = -2; // 时长现在显示的秒数（-1 = 还没显示过）
@@ -174,7 +177,9 @@ final class PubHook {
                 Object o = v.getTag(ROOT_TAG);
                 if (o instanceof Rows) {
                     Rows rs = (Rows) o;
-                    placeAll(rs);
+                    boolean same = l == ol && t == ot && r == or && b == ob;
+                    if (same && (rs.intro != null || rs.aid == null)) return; // 尺寸没变、也没有要补找的：什么都不做（加 / 拿浮层也会让根重新布局一次）
+                    if (!same) placeAll(rs);
                     // bind 时容器还没挂进根里：根布局时（容器这时一般已经在了）补找一次，空白行和文案样式不用等第一个进度回调
                     DanmakuConfig c = DanmakuHook.cfg;
                     if (rs.intro == null && rs.aid != null && styleOn() && ensureIntro(rs)) applyAll(rs);
@@ -189,13 +194,18 @@ final class PubHook {
         @Override
         public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
             try {
+                boolean same = l == ol && t == ot && r == or && b == ob; // 大小位置没变（锁定大小后每秒换字走这里）
                 ViewParent p = v.getParent();
                 if (!(p instanceof View)) return;
                 Object o = ((View) p).getTag(ROOT_TAG);
                 if (!(o instanceof Rows)) return;
                 Rows rs = (Rows) o;
-                if (v == rs.pub) place(rs, v, true);
-                else if (v == rs.time) place(rs, v, false);
+                if (v == rs.pub) {
+                    if (!same) place(rs, v, true);
+                } else if (v == rs.time) {
+                    if (!same) place(rs, v, false);
+                    lockTime(rs, v);
+                }
             } catch (Throwable ignored) {
             }
         }
@@ -326,6 +336,7 @@ final class PubHook {
      */
     private static void tryText(ClassLoader cl, ClassLoader ctx) {
         if (HookGuard.settled(HookGuard.PUB)) return;
+        if (!styleOn()) return; // 文案样式全关：不挂这个通用文字控件的钩子（没有结论，设置里打开样式后回到前台再挂）
         HookGuard.hook(HookGuard.PUB, DMT, SET_TEXT, TEXT_HOOK,
                 "DmtTextView 里没有 setText(CharSequence, BufferType)（文案控件的设置方法变了，需要重新追踪）", cl, ctx);
     }
@@ -337,6 +348,7 @@ final class PubHook {
      */
     private static void tryDraw(ClassLoader cl, ClassLoader ctx) {
         if (HookGuard.settled(HookGuard.CAP_DRAW)) return;
+        if (!styleOn()) return; // 同上：文案样式全关时不挂每帧都会走的绘制钩子
         if (fCurColor == null) {
             try {
                 Field f = TextView.class.getDeclaredField("mCurTextColor");
@@ -423,13 +435,15 @@ final class PubHook {
         protected void beforeHookedMethod(MethodHookParam p) {
             drawSwapped = false;
             try {
+                DanmakuConfig cf = DanmakuHook.cfg;
+                if (cf.lineBg <= 0 && cf.capColor == 0) return; // 都没开：评论等所有 MentionTextView 的每次绘制在这里就返回
                 Object self = p.thisObject;
                 if (!(self instanceof TextView) || ((View) self).getTag(CAP_TAG) == null) return;
-                int bg = DanmakuHook.cfg.lineBg;
+                int bg = cf.lineBg;
                 if (bg > 0 && p.args != null && p.args.length > 0 && p.args[0] instanceof android.graphics.Canvas) {
                     LineBg.drawBars((android.graphics.Canvas) p.args[0], (TextView) self, bg); // 文字灰色底：画在字之前
                 }
-                int want = DanmakuHook.cfg.capColor;
+                int want = cf.capColor;
                 Field f = fCurColor;
                 if (want == 0 || f == null) return;
                 int old = f.getInt(self);
@@ -781,7 +795,7 @@ final class PubHook {
 
     /** AwemeIntroInfoLayout 上挂的东西（tag，主线程用）：登记过 / 被我们上移过。 */
     private static final int BLANK_TAG = 0x7e0b0c08, INTRO_TAG = 0x7e0b0c09, BARW_TAG = 0x7e0b0c0a;
-    private static final int BAR_PX = 16, BAR_COLOR = 0x66FFFFFF;
+    private static final int BAR_PX = 16;
     private static final int MAX_INTROS = 16;
     /** 见过的 AwemeIntroInfoLayout（弱引用，主线程用）；每个视频页一个，邻近页的也在。回到前台时按新配置重套上顶高度。 */
     private static final ArrayList<WeakReference<ViewGroup>> INTROS = new ArrayList<>();
@@ -856,6 +870,7 @@ final class PubHook {
                 intro.setTranslationY(0f);
                 intro.setTag(BLANK_TAG, null);
             }
+            applyBar(intro);
             return;
         }
         float h = bh < 0
@@ -872,6 +887,7 @@ final class PubHook {
         @Override
         public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
             try {
+                if (l == ol && t == ot && r == or && b == ob) return;
                 if (v instanceof ViewGroup) applyBar((ViewGroup) v);
             } catch (Throwable ignored) {
             }
@@ -901,7 +917,11 @@ final class PubHook {
         View root = r.root;
         if (!(root instanceof ViewGroup)) return;
         View bar = r.bar;
-        if (DanmakuHook.cfg.blankH == 0 || intro.getWidth() <= 0 || intro.getHeight() <= 0) {
+        DanmakuConfig c = DanmakuHook.cfg;
+        // 开关开着、不透明度不是 0（0 = 全透明，不画），选中的那几项里有开着的（1 = 发布地，2 = 时长，3 = 两个都选）
+        boolean want = c.barOn && c.barAlpha > 0
+                && (((c.barSel & 1) != 0 && c.pubAlways) || ((c.barSel & 2) != 0 && c.timeAlways));
+        if (!want || intro.getWidth() <= 0 || intro.getHeight() <= 0) {
             if (bar != null && bar.getVisibility() != View.GONE) bar.setVisibility(View.GONE);
             return;
         }
@@ -931,8 +951,11 @@ final class PubHook {
             lp.height = BAR_PX;
             bar.setLayoutParams(lp);
         }
-        int col = DanmakuHook.cfg.barColor != 0 ? DanmakuHook.cfg.barColor : BAR_COLOR;
-        bar.setBackgroundColor(col);
+        int col = ((c.barAlpha * 255 / 100) << 24) | ((c.barColor != 0 ? c.barColor : 0xFFFFFF) & 0xFFFFFF);
+        if (col != r.barCol) { // 颜色没变就不再设（每次布局都会走到这里）
+            r.barCol = col;
+            bar.setBackgroundColor(col);
+        }
         float ty = y + intro.getHeight();
         if (bar.getTranslationX() != x) bar.setTranslationX(x);
         if (bar.getTranslationY() != ty) bar.setTranslationY(ty);
@@ -1031,6 +1054,8 @@ final class PubHook {
         TextView t = timeRow(r);
         if (t == null) return;
         String text = fmt(sec) + " / " + (dsec >= 0 ? fmt(dsec) : "--:--");
+        if (r.timeLocked && text.length() != r.timeLen) unlockTime(r, t); // 字符数变了（例如进了 1 小时）：放开，重新量
+        r.timeLen = text.length();
         if (!text.contentEquals(t.getText())) t.setText(text);
         if (t.getVisibility() != View.VISIBLE) t.setVisibility(View.VISIBLE);
         r.lastSec = sec;
@@ -1044,6 +1069,7 @@ final class PubHook {
         DanmakuConfig c = DanmakuHook.cfg;
         if (c.timeSize != r.timeSz) {
             r.timeSz = c.timeSize;
+            if (r.timeLocked) unlockTime(r, t); // 字号变了：放开，重新量
             t.setTextSize(TypedValue.COMPLEX_UNIT_SP, c.timeSize);
         }
         int color = c.timeColor != 0 ? c.timeColor : TIME_COLOR;
@@ -1057,17 +1083,44 @@ final class PubHook {
     }
 
     /**
+     * 时长浮层每秒换一次字，宽高都是 WRAP_CONTENT 时每次换字都会让整个窗口重新布局一遍。第一次布局完（文字字符数没变）就把它锁成固定大小：
+     * 宽度按「所有数字都换成 8」的文字量一次（数字不等宽的字体也放得下），之后同样字符数的换字只重绘、不重新布局。
+     * 字符数变了 / 字号变了就放开（WRAP_CONTENT）重新量，再锁。
+     */
+    private static void lockTime(Rows r, View v) {
+        if (r.timeLocked || !(v instanceof TextView) || v.getWidth() <= 0 || v.getHeight() <= 0 || v.getVisibility() != View.VISIBLE) return;
+        TextView t = (TextView) v;
+        CharSequence cs = t.getText();
+        if (cs == null || cs.length() != r.timeLen) return;
+        ViewGroup.LayoutParams lp = v.getLayoutParams();
+        if (lp == null) return;
+        char[] ch = cs.toString().toCharArray();
+        for (int i = 0; i < ch.length; i++) if (ch[i] >= '0' && ch[i] <= '9') ch[i] = '8';
+        int w = Math.max(v.getWidth(), (int) Math.ceil(t.getPaint().measureText(new String(ch))) + t.getTotalPaddingLeft() + t.getTotalPaddingRight());
+        lp.width = w;
+        lp.height = v.getHeight();
+        r.timeLocked = true;
+        v.setLayoutParams(lp);
+    }
+
+    private static void unlockTime(Rows r, View v) {
+        r.timeLocked = false;
+        ViewGroup.LayoutParams lp = v.getLayoutParams();
+        if (lp == null) return;
+        lp.width = ViewGroup.LayoutParams.WRAP_CONTENT;
+        lp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+        v.setLayoutParams(lp);
+    }
+
+    /**
      * 播放进度（TimeHook 的 time.progress 转进来，主线程，每个事件会经过几个包装监听器重复到达）：按视频 id（= Aweme.aid）找到页面，更新这一页的时长浮层。
-     * bind 时容器还没在根里的页面，在这里（第一个进度回调）再找一次（空白行和文案样式要用）。认不出的 id（不是 feed 里的视频）什么都不做。
+     * 认不出的 id（不是 feed 里的视频）什么都不做。bind 时容器还没在根里的页面，改由页面根第一次布局时（ROOT_LISTENER）补找。
      */
     static void onProgress(String id, long pos, long dur) {
-        if (id == null) return;
-        DanmakuConfig c = DanmakuHook.cfg;
+        if (id == null || !DanmakuHook.cfg.timeAlways) return; // 没开时长：每个回调在这里就返回，不查表
         WeakReference<Rows> w = PAGES.get(id);
         Rows r = w == null ? null : w.get();
         if (r == null) return;
-        if (r.intro == null && styleOn() && ensureIntro(r)) applyAll(r);
-        if (!c.timeAlways) return;
         long sec = pos > 0 ? pos / 1000 : 0;
         long dsec = dur > 0 ? dur / 1000 : -1;
         if (dsec >= 0 && sec > dsec) sec = dsec;
