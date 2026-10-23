@@ -775,7 +775,7 @@ final class PubHook {
 
     private static boolean styleOn() {
         DanmakuConfig c = DanmakuHook.cfg;
-        return c.capOutline || c.capColor != 0 || c.lineBg > 0;
+        return c.capColor != 0 || c.lineBg > 0;
     }
 
     /** 认出是视频文案：打 tag（cap.draw 只改打过 tag 的），挂一次布局监听（展开 / 收起让布局变了，重设样式）。 */
@@ -787,17 +787,13 @@ final class PubHook {
         }
     }
 
-    /** 视频文案的字色和黑边（只有这两项里有开着的才动；有变化才设，布局变化时反复调用也没有开销）。 */
+    /** 视频文案的字色（有变化才设，布局变化时反复调用也没有开销）。 */
     private static void styleCaption(View v) {
         DanmakuConfig c = DanmakuHook.cfg;
-        if (!c.capOutline && c.capColor == 0 && c.lineBg == 0) return;
+        if (c.capColor == 0 && c.lineBg == 0) return;
         if (!(v instanceof TextView)) return;
         TextView t = (TextView) v;
         if (c.capColor != 0 && t.getCurrentTextColor() != c.capColor) t.setTextColor(c.capColor);
-        if (c.capOutline) {
-            float r = 3f * t.getResources().getDisplayMetrics().density;
-            if (t.getShadowRadius() != r) t.setShadowLayer(r, 0f, 0f, 0xFF000000);
-        }
     }
 
     // ------------------------------------------------------------ 空白行（在容器里，文案后面）
