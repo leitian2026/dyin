@@ -8,11 +8,12 @@ import android.text.Layout;
 import android.widget.TextView;
 
 /**
- * 文字灰色底（1.25.0）：视频文案、视频时长、发布日期地点，每一行字后面画一条灰色底，透明度 lineBg（0～100%）在设置页调，0 = 不画。
+ * 文字灰色底（1.25.0）：视频文案、视频时长、发布日期地点（1.29.0 起还有弹幕、直播间开播时间），每一行字后面画一条灰色底，透明度 lineBg（0～100%）在设置页调，0 = 不画。
  * 底 = 这一行的文字框向四周各放大 1sp（宽、高都比字大一个字号档），圆角；多行的底画成一个整体（Path 并集），重叠处不会变深。
  *
  * 画在文字之前：自己的两行（发布信息、时长）用 {@link Row}（TextView 子类，onDraw 先画底再 super）；
- * 抖音的文案控件在 PubHook.DrawHook（MentionTextView#onDraw 之前）里调 {@link #drawBars}。
+ * 抖音的文案控件在 PubHook.DrawHook（MentionTextView#onDraw 之前）里调 {@link #drawBars}；
+ * 直播间开播时间也是 {@link Row}；弹幕（Compose 画的，没有 TextView）在 DanmakuHook 里按每条弹幕的文字框调 {@link #drawBox}。
  * 绘制路径里不分配对象：Path / Paint 是静态复用的（都在主线程绘制，不重入）。
  */
 final class LineBg {
@@ -46,6 +47,20 @@ final class LineBg {
             if (rt <= lf) continue; // 空行不画
             PATH.addRoundRect(ox + lf - pad, oy + l.getLineTop(i) - pad, ox + rt + pad, oy + l.getLineBottom(i) + pad, pad * 2f, pad * 2f, Path.Direction.CW);
         }
+        fillPath(cv, sd, pct);
+    }
+
+    /** 在 cv 上给一个文字框（左上右下，canvas 像素，不含底多出的边）画底，圆角、柔边和 {@link #drawBars} 一样。弹幕用。 */
+    static void drawBox(Canvas cv, float l, float t, float r, float b, float sd, int pct) {
+        if (pct <= 0 || cv == null || r <= l || b <= t) return;
+        float pad = BAR_SP * sd;
+        PATH.rewind();
+        PATH.addRoundRect(l - pad, t - pad, r + pad, b + pad, pad * 2f, pad * 2f, Path.Direction.CW);
+        fillPath(cv, sd, pct);
+    }
+
+    /** 把 PATH 画成带柔边的灰色底。 */
+    private static void fillPath(Canvas cv, float sd, int pct) {
         int a = Math.min(100, pct) * 255 / 100;
         // 柔边：不用 BlurMaskFilter（硬件绘制下这台机器上画不出来）。先在底的外面画 3 圈逐层变淡的描边（只画在底的外侧），再画底本身。
         cv.save();
