@@ -786,7 +786,6 @@ public class MainActivity extends Activity {
             {"live.page", "直播间开播时间：直播间页面"},
             {"live.room", "直播间开播时间：房间数据"},
             {"prof.pager", "我的主页默认喜欢：个人主页翻页（ViewPager#setCurrentItem）"},
-            {"prof.tap", "我的主页默认喜欢：认用户点页内标签（TabView#performClick）"},
     };
 
     /** 用 root 读抖音数据目录里的 hooks.properties（抖音进程自己写的），列出每个钩子的状态。 */
