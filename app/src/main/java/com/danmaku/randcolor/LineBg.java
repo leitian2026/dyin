@@ -21,7 +21,7 @@ final class LineBg {
 
     private static final Path PATH = new Path();
     private static final Paint PAINT = new Paint(Paint.ANTI_ALIAS_FLAG);
-    /** 底的颜色：接近纯黑（1.29.1 起，原来是中灰 #666666）。所有用到灰色底的文字（现在的、以后加的）都走这一处，换色只改这里。 */
+    /** 底的默认颜色：接近纯黑（1.29.1 起，原来是中灰 #666666）。用户在设置页选了底色（cfg.lineBgColor）就用用户的，见 fillPath。 */
     private static final int GRAY = 0x00101010;
 
     /**
@@ -82,6 +82,7 @@ final class LineBg {
     /** 把 PATH 画成带柔边的灰色底。 */
     private static void fillPath(Canvas cv, float sd, int pct) {
         int a = Math.min(100, pct) * 255 / 100;
+        int gray = DanmakuHook.cfg.lineBgColor == 0 ? GRAY : (DanmakuHook.cfg.lineBgColor & 0xFFFFFF); // 用户选的底色；0 = 默认近黑
         // 柔边：不用 BlurMaskFilter（硬件绘制下这台机器上画不出来）。先在底的外面画 3 圈逐层变淡的描边（只画在底的外侧），再画底本身。
         cv.save();
         cv.clipOutPath(PATH);
@@ -89,12 +90,12 @@ final class LineBg {
         PAINT.setStrokeJoin(Paint.Join.ROUND);
         for (int k = 3; k >= 1; k--) {
             PAINT.setStrokeWidth(2f * SOFT_SP * sd * k / 3f);
-            PAINT.setColor(GRAY | (a / 4) << 24);
+            PAINT.setColor(gray | (a / 4) << 24);
             cv.drawPath(PATH, PAINT);
         }
         cv.restore();
         PAINT.setStyle(Paint.Style.FILL);
-        PAINT.setColor(GRAY | a << 24);
+        PAINT.setColor(gray | a << 24);
         cv.drawPath(PATH, PAINT);
     }
 
