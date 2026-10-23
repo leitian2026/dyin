@@ -68,6 +68,9 @@ public class MainActivity extends Activity {
     private int liveX = 3, liveY = 10;
     private PctField bgF;
     private BlankField blankF;
+    private Switch swBar;
+    private LinearLayout segBarSel;
+    private PctField barAlphaF;
     /** 发布日期地点行、视频时长行的位置偏移（dp）：不在设置页调，在抖音里用位置浮窗调，这里只存 / 显示。 */
     private int pubX = -1, pubY = -1, timeX = -1, timeY = -1;
     private TextView tvPubPos, tvTimePos;
@@ -191,11 +194,21 @@ public class MainActivity extends Activity {
         Section sBlank = new Section("文案下方空白行", false, null, () -> blankF.v < 0 ? "默认（" + DanmakuConfig.BLANK_DEFAULT_SP + " sp 高）" : blankF.v == 0 ? "不上顶" : "高度 " + blankF.v * 2 + " px");
         sBlank.body.addView(note("把作者声明和文案这一整块往上顶一段，下面留出空位给发布地和时长。默认是 37 sp 字那么高；每按一次 + 多 2 像素，− 少 2 像素；0 = 不顶；点中间的数字回到默认。回到抖音后生效。"));
         sBlank.body.addView(settingRow("高度", blankF.build()));
-        sBlank.body.addView(rowLine());
-        barColorF = new ColorField("默认（半透明白）", "选择色条颜色");
-        sBlank.body.addView(note("空位的顶上（文案下面）有一条 16 像素高的色条，只在「不顶」以外的高度时出现。"));
-        sBlank.body.addView(barColorF.row("色条颜色"));
         place(sBlank);
+
+        swBar = new Switch(this);
+        barColorF = new ColorField("默认（白色）", "选择色条颜色");
+        barAlphaF = new PctField(40);
+        Section sBar = new Section("文案下方色条", false, swBar,
+                () -> !swBar.isChecked() ? "已关闭" : barAlphaF.v == 0 ? "全透明" : "不透明度 " + barAlphaF.v + "%");
+        sBar.body.addView(note("文案下面一条 16 像素高的色条（上顶留出的空位的顶上）。下面选它跟着谁：只有选中的那几项里有开着的，色条才出现。"));
+        segBarSel = segmented("发布地", "时长", "两个都选");
+        sBar.body.addView(segBarSel);
+        sBar.body.addView(rowLine());
+        sBar.body.addView(settingRow("不透明度（0% = 全透明）", barAlphaF.build()));
+        sBar.body.addView(rowLine());
+        sBar.body.addView(barColorF.row("色条颜色"));
+        place(sBar);
 
         bgF = new PctField(40);
         Section sBg = new Section("文字灰色底", false, null, () -> bgF.v == 0 ? "已关闭" : "不透明度 " + bgF.v + "%");
@@ -659,6 +672,9 @@ public class MainActivity extends Activity {
         timeY = c.timeY;
         blankF.set(c.blankH);
         barColorF.set(c.barColor);
+        swBar.setChecked(c.barOn);
+        setSeg(segBarSel, Math.max(1, Math.min(3, c.barSel)) - 1);
+        barAlphaF.set(c.barAlpha);
         updateVidPos();
     }
 
@@ -690,6 +706,9 @@ public class MainActivity extends Activity {
         c.timeY = timeY;
         c.blankH = blankF.v;
         c.barColor = barColorF.color;
+        c.barOn = swBar.isChecked();
+        c.barSel = segIndex(segBarSel) + 1;
+        c.barAlpha = barAlphaF.v;
         c.liveX = liveX; // 位置只在抖音里用浮窗调，这里原样带着
         c.liveY = liveY;
         java.util.ArrayList<String> hid = new java.util.ArrayList<>();
