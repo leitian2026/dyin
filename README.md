@@ -23,6 +23,13 @@
 ## 使用
 设置页的内容按功能折叠成一个个分组（点标题展开，展开一个其他自动收起；有总开关的分组不用展开就能开关）。前提：LSPosed 里启用模块、作用域勾选抖音、强杀抖音重开；改完点底部「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
+## 1.30.0：容器只从文案控件来（图文帖不上顶、发布地不在文案下方）
+
+- **问题**：首页推荐里的图文帖（带「文字」标签），文案有灰色底（文案那条链通），但没上顶、发布地也不在文案下方（容器那条链没走通）。旧版容器有两个找法：`pub.intro`（`AwemeIntroInfoLayout#onAttachedToWindow`）和从页面根往下找 8 层；而文案的 `setText` 钩子其实已经顺着父级认出了容器（`insideIntro`），认完就丢了。
+- **证据（TextRec 40.7.0，普通视频 / 短剧 / 图集三类 holder）**：`VideoViewHolder#bind` 是三类共用的（`ForwardFeedReversionVideoViewHolder` / `PlayletVideoViewHolder` / `HorizonPhotosViewHolder`）；文案控件 `ScrollMentionTextView`（id=desc）由 `FeedDescModule` 创建，`setText` 没混淆、每次 bind 都走。**没有证据的**：首页推荐里图文帖本身没抓到（从历史记录打开显示正常），旧版两个找法在它上面具体哪个没走通不知道。
+- **做法**：容器只有一个入口——`pub.text`：文案第一次被认出（在 `AwemeIntroInfoLayout` 里面）时 `takeIntro`：往上找 `VideoViewHolderRootView` 登记这一页（`rowsOfIntro`，bind 随后补 aid / 发布信息），再 `adopt` 容器（上顶 + 文案下方位置）。**删掉** `pub.intro` 钩子（`HookGuard.PUB_INTRO` / `IDS` / 设置页钩子状态那一项）、`findIntro` / `under` / `ensureIntro`、`bindPage` 和 `ROOT_LISTENER` 里的补找。`pub.text` 现在在文案样式、上顶、文案下方位置有一个开着时就挂（原来只看样式），`capHookOn()`。
+- **风险**：没编译、没上机。理论上不依赖 holder 子类、根的嵌套和回调先后；如果文案的 `setText` 在容器挂进页面之前就走完、之后不再走，这一页就不会被接手（图文帖上灰色底能画出来，说明 setText 时容器已在）。
+
 ## 1.29.3：弹幕字的最低亮度可调（百分比）
 
 - **做法**：设置页「文字灰色底」里「不透明度」下面加「弹幕字的最低亮度」（0～100%，每次 5%，默认 30%，配置键 `textLift`）。弹幕随机色里比这个亮度暗的颜色往白色提亮，100% = 全部接近白色，0% = 不提亮。百分比就是相对亮度（gamma 2 近似）的下限 × 100，1.29.2 写死的 0.30 即 30%。`LineBg.legible(rgb, minLum)` 改成带参数；弹幕颜色缓存的标签里加了亮度档（`textLift / 5`，位 26～30），改设置后旧缓存自然失效。分组摘要里也显示这个值。没有新钩子，没编译、没上机。
