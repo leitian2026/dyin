@@ -760,7 +760,7 @@ public class MainActivity extends Activity {
             {"time.progress", "视频时长：播放进度"},
             {"tab.hide", "首页顶部标签隐藏"},
             {"pub.bind", "发布日期地点 / 视频时长：翻页绑定（视频数据 + 页面容器）"},
-            {"pub.text", "视频文案：描边 / 改色（设置文字时）"},
+            {"pub.text", "视频文案：描边 / 改色 / 空白行（设置文字时）"},
             {"pub.anchor", "视频文案：描边 / 改色（认文案控件）"},
             {"cap.draw", "视频文案：绘制时改色"},
             {"live.page", "直播间开播时间：直播间页面"},
