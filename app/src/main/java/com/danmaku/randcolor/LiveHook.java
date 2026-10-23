@@ -449,7 +449,7 @@ final class LiveHook {
         if (root == null) return;
         TextView t = tvOf(pg);
         if (t == null) {
-            t = new TextView(root.getContext());
+            t = new LineBg.Row(root.getContext()); // 带文字灰色底（lineBg）；四边的内边距给底留地方
             t.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)); // TextView 重新布局时会读它
             t.setIncludeFontPadding(false);
             t.setShadowLayer(dp(root, 3), 0f, 0f, 0xFF000000); // 一圈黑边，亮背景上也看得清
