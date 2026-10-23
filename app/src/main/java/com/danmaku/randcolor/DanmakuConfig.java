@@ -14,8 +14,6 @@ public final class DanmakuConfig {
     public boolean enabled = true;
     /** 0 = 鲜艳（高饱和高亮度）  1 = 任意（含浅色/粉彩） */
     public int mode = 0;
-    /** 点右侧爱心按钮时，不点赞，改为打开评论。 */
-    public boolean likeBtnToComment = false;
     /** 双击视频时，不点赞、不出红心，改为打开评论。 */
     public boolean dtapToComment = false;
     /** 视频时长一直显示（放在发布信息那一行的下面，没显示发布信息就放在文案下面）。 */
@@ -28,8 +26,6 @@ public final class DanmakuConfig {
     public int timeSize = 20, pubSize = 16;
     /** 时长文字 / 发布信息那一行的颜色（0xAARRGGBB，不透明）；0 = 默认（时长白色，发布信息半透明白）。和视频文案的颜色互不影响。 */
     public int timeColor = 0, pubColor = 0;
-    /** 视频文案加黑色描边（用阴影层画一圈黑边）。关掉后要重启抖音才恢复。 */
-    public boolean capOutline = false;
     /** 视频文案的颜色（0xAARRGGBB，不透明）；0 = 不改，用抖音原来的颜色。话题、@ 这类抖音自己上色的文字不受影响。 */
     public int capColor = 0;
     /** 直播间里显示开播时间（只在直播间页面里画，别处不显示）。 */
@@ -68,7 +64,6 @@ public final class DanmakuConfig {
             Properties p = new Properties();
             p.setProperty("enabled", String.valueOf(enabled));
             p.setProperty("mode", String.valueOf(mode));
-            p.setProperty("likeBtnToComment", String.valueOf(likeBtnToComment));
             p.setProperty("dtapToComment", String.valueOf(dtapToComment));
             p.setProperty("timeAlways", String.valueOf(timeAlways));
             p.setProperty("pubAlways", String.valueOf(pubAlways));
@@ -77,7 +72,6 @@ public final class DanmakuConfig {
             p.setProperty("pubFormat", pubFormat == null ? PubFormat.DEFAULT : pubFormat);
             p.setProperty("timeColor", String.valueOf(timeColor));
             p.setProperty("pubColor", String.valueOf(pubColor));
-            p.setProperty("capOutline", String.valueOf(capOutline));
             p.setProperty("capColor", String.valueOf(capColor));
             p.setProperty("idleExitMin", String.valueOf(idleExitMin));
             p.setProperty("liveTime", String.valueOf(liveTime));
@@ -183,13 +177,11 @@ public final class DanmakuConfig {
 
     private static void fill(DanmakuConfig c, Properties p) {
         c.enabled = Boolean.parseBoolean(p.getProperty("enabled", "true").trim());
-        c.likeBtnToComment = Boolean.parseBoolean(p.getProperty("likeBtnToComment", "false").trim());
         c.dtapToComment = Boolean.parseBoolean(p.getProperty("dtapToComment", "false").trim());
         c.timeAlways = Boolean.parseBoolean(p.getProperty("timeAlways", "false").trim());
         c.pubAlways = Boolean.parseBoolean(p.getProperty("pubAlways", "false").trim());
         c.timeSize = parseSize(p.getProperty("timeSize", "20"), 20);
         c.pubSize = parseSize(p.getProperty("pubSize", "16"), 16);
-        c.capOutline = Boolean.parseBoolean(p.getProperty("capOutline", "false").trim());
         c.capColor = parseColor(p.getProperty("capColor", "0"));
         c.timeColor = parseColor(p.getProperty("timeColor", "0"));
         c.pubColor = parseColor(p.getProperty("pubColor", "0"));
