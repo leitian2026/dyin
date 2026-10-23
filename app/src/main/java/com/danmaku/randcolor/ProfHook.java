@@ -1,10 +1,6 @@
 package com.danmaku.randcolor;
 
 import android.os.SystemClock;
-import android.text.TextUtils;
-import android.view.View;
-import android.view.ViewGroup;
-import android.widget.TextView;
 
 import java.lang.reflect.Method;
 
@@ -12,32 +8,27 @@ import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 
 /**
- * 点底部「我」进个人主页，默认停在「喜欢」标签（1.32.0）。
+ * 个人主页默认停在「喜欢」标签（1.32.1 重写，1.32.0 是「点底部『我』开 3 秒窗口」的做法，太绕，已去掉）。
  *
- * 依据（TextRec 40.9.0，textrec-tasks-20261023-231633；任务 2 点「我」、任务 3/5 点「喜欢」、任务 4 点「作品」、任务 6 切走再回来）：
- *  - 个人主页的分页控件是 com.ss.android.ugc.aweme.profile.widgets.ProfileViewPager（类名没混淆，视图树 id=yq4），
- *    标签（作品 日常 推荐 收藏 喜欢）是它的页：点「喜欢」时调 androidx.viewpager.widget.ViewPager#setCurrentItem(4)，点「作品」时是 (0)，
- *    「喜欢」是最后一页。这个方法在 androidx 的 ViewPager 里声明（int / int,boolean 两个重载，没混淆），ProfileViewPager 自己不声明。
- *  - 进主页时抖音自己调 setCurrentItem(0)（三次：标签选中的协程回调、X.18rI.run 里的 Runnable、PandaProfileMyPager.LJJLJLI 里的 Runnable，
- *    时间是点底部「我」之后 0.2～0.8 秒；都是混淆名，所以不挂它们，只挂 ViewPager#setCurrentItem 再按 this 的类过滤）。
- *    切走再回来（任务 6）抖音自己调的是 setCurrentItem(4)（记住了上次选的标签），不受这个钩子影响（只改参数 0）。
- *  - 底部「我」是 com.ss.android.ugc.aweme.homepage.tab.ui.bottom.BottomTab（类名没混淆，一共 5 个 BottomTab），里面有一个文字是「我」的
- *    TextView（AntiBurnDuxTextView）；点它时 View#performClick 在 BottomTab 上被调用（任务 2、6）。
- *  - 页内标签 DmtTabLayout$TabView 的 performClick（任务 3、4、5）用来认出「用户自己点了页内标签」。
+ * 规则只有一条：个人主页的分页控件被切页时，只有「用户自己点了页内标签」才听用户的，其余一律切到最后一页（= 喜欢）。
+ * 抖音每次进主页都会自己调 setCurrentItem 恢复标签（第一次是 0，之后是上次选的），这些调用都不是用户点出来的，所以每次进「我」都会落在「喜欢」；
+ * 用户点「作品」「收藏」等页内标签时，那次切页会被放过，想看哪个看哪个。
  *
- * 做法：
- *  1) pub 之外另两个钩子：prof.tap 挂 View#performClick（框架方法，先确认 BottomTab 和 DmtTabLayout$TabView 两个类都在才挂），
- *     点到「我」的 BottomTab 就记下时刻 armedAt（点到别的 BottomTab 清掉）；点到页内标签 TabView 就记下时刻 userAt。
- *  2) prof.pager 挂 ViewPager#setCurrentItem（两个重载，先确认 ProfileViewPager 在、是它的子类），回调里：
- *     this 是 ProfileViewPager、参数是 0、距点「我」不到 WINDOW_MS、且距用户点页内标签超过 USER_MS，就把参数改成 LAST（99）。
- *     ViewPager 内部会把越界的页号收到最后一页（= 喜欢），所以不用知道有几个标签；适配器还没设好时它自己直接返回，后面的 setCurrentItem(0) 还会再被改一次。
- *     第二个重载的 smoothScroll 改成 false，不演动画。
- *  没有定时器、没有轮询：窗口只靠比较 SystemClock.uptimeMillis()。回调里不分配对象、不反射。
+ * 依据（TextRec 40.9.0，textrec-tasks-20261023-231633、textrec-tasks-20261024-071912）：
+ *  - 分页控件 com.ss.android.ugc.aweme.profile.widgets.ProfileViewPager（类名没混淆）；它的 setCurrentItem(int) / (int, boolean) 是 androidx ViewPager 里声明的，
+ *    ProfileViewPager 不覆写。点「喜欢」→ (4)，点「作品」→ (0)；「喜欢」是最后一页。
+ *  - 进主页时抖音自己调 (0)（第一次进，共 4 次，来自混淆名的协程 / Runnable）；之后每次进主页调的是它记住的标签（(0) 或 (4)）；分页控件和适配器整个进程只建一次（对象身份相同，setAdapter 只出现一次）。
+ *  - 用户点页内标签：DmtTabLayout$TabView#performClick（类名、方法名都没混淆，方法是 TabView 自己声明的，栈里是 DmtTabLayout$TabView.performClick），
+ *    点完 20 毫秒内就是对应的 setCurrentItem（点「作品」晚一点，经过一个 Runnable，仍在 1.2 秒内）。
+ *
+ * 钩子：prof.tap = DmtTabLayout$TabView#performClick（只挂这个类自己的方法，走 HookGuard.hook，不是全局钩子），只记一个时刻；
+ *       prof.pager = ViewPager#setCurrentItem 两个重载（先确认 ProfileViewPager 在、是它的子类），回调里按 this 的类过滤、比较时间、改参数。
+ * 越界页号 99 由 ViewPager 自己收到最后一页；适配器还没设好时它直接返回，之后抖音的下一次 setCurrentItem 还会被改。没有定时器、没有轮询，回调里不分配对象、不反射。
  *
  * 局限（没上机、没编译）：
- *  - 「喜欢」是最后一页只有这一个账号的证据；账号没有「喜欢」页或它不是最后一页时，会落在最后一页。
- *  - 点「我」时人已经在个人主页（再点一次「我」），如果抖音又调了 setCurrentItem(0)，会被改到「喜欢」；追踪里没有这种情况。
- *  - 窗口 3 秒内抖音如果在用户没点页内标签的情况下又调 setCurrentItem(0)（比如刷新），也会被改；追踪里 3 秒内只有进主页那几次。
+ *  - 别人的主页如果用的也是 ProfileViewPager，进去也会落在最后一页；追踪里没抓过别人的主页，不知道它用不用同一个类。
+ *  - 「喜欢」是最后一页，只有一个账号的证据。
+ *  - 用户点页内标签之后 1.2 秒内抖音自己的切页会被放过；正常点一下不会碰到。
  * 没挂上时个人主页保持原样，安静失效。
  */
 final class ProfHook {
@@ -45,29 +36,25 @@ final class ProfHook {
 
     private static final String PAGER = "com.ss.android.ugc.aweme.profile.widgets.ProfileViewPager";
     private static final String VP = "androidx.viewpager.widget.ViewPager";
-    private static final String BOTTOM = "com.ss.android.ugc.aweme.homepage.tab.ui.bottom.BottomTab";
     private static final String TABVIEW = "com.bytedance.ies.dmt.ui.widget.tablayout.DmtTabLayout$TabView";
 
-    /** 点「我」之后多久内的 setCurrentItem(0) 算「进主页的默认页」。 */
-    private static final long WINDOW_MS = 3000L;
-    /** 用户点页内标签之后多久内的 setCurrentItem(0) 算用户自己选的。 */
+    /** 用户点页内标签之后多久内的切页算用户自己选的。 */
     private static final long USER_MS = 1200L;
     /** 越界页号：ViewPager 收到最后一页（= 喜欢）。 */
     private static final Integer LAST = 99;
-    /** 点「我」那一页底部标签里的文字。 */
-    private static final String ME = "我";
 
     private static final XC_MethodHook PAGER_HOOK = new PagerHook();
     private static final XC_MethodHook TAP_HOOK = new TapHook();
 
-    private static volatile Class<?> pagerCls, bottomCls, tabViewCls;
-    private static volatile long armedAt, userAt;
+    private static volatile Class<?> pagerCls;
+    private static volatile long userAt;
 
     /** 启动时和每次回到前台都会被调用；功能没开就不挂（没有结论，开了之后回到前台再挂）。 */
     static void tryHook(ClassLoader cl) {
         if (cl == null || !DanmakuHook.cfg.profFav) return;
         tryPager(cl);
-        tryTap(cl);
+        HookGuard.hook(HookGuard.PROF_TAP, TABVIEW, HookGuard.named("performClick"), TAP_HOOK,
+                "DmtTabLayout$TabView 里没有 performClick（需要重新用 TextRec 追踪个人主页点页内标签）", cl);
     }
 
     private static synchronized void tryPager(ClassLoader cl) {
@@ -80,72 +67,32 @@ final class ProfHook {
             HookGuard.miss(HookGuard.PROF_PAGER, "ProfileViewPager 不再是 androidx ViewPager 的子类（抖音换了分页控件，需要重新用 TextRec 追踪 setCurrentItem）");
             return;
         }
-        int n = 0;
+        Method a, b;
         try {
-            Method a = vp.getDeclaredMethod("setCurrentItem", int.class);
-            Method b = vp.getDeclaredMethod("setCurrentItem", int.class, boolean.class);
+            a = vp.getDeclaredMethod("setCurrentItem", int.class);
+            b = vp.getDeclaredMethod("setCurrentItem", int.class, boolean.class);
+        } catch (NoSuchMethodException e) {
+            HookGuard.miss(HookGuard.PROF_PAGER, "ViewPager 里没有 setCurrentItem(int) / (int, boolean)（需要重新用 TextRec 追踪个人主页切标签）");
+            return;
+        }
+        try {
             pagerCls = pc;
             XposedBridge.hookMethod(a, PAGER_HOOK);
-            n++;
             XposedBridge.hookMethod(b, PAGER_HOOK);
-            n++;
-        } catch (NoSuchMethodException e) {
-            pagerCls = null;
-            if (n == 0) {
-                HookGuard.miss(HookGuard.PROF_PAGER, "ViewPager 里没有 setCurrentItem(int) / (int, boolean)（需要重新用 TextRec 追踪个人主页切标签）");
-                return;
-            }
         } catch (Throwable t) {
             pagerCls = null;
             HookGuard.miss(HookGuard.PROF_PAGER, "ViewPager#setCurrentItem 挂不上：" + t);
             return;
         }
-        HookGuard.ok(HookGuard.PROF_PAGER, n == 2 ? "" : "只挂上一个重载");
+        HookGuard.ok(HookGuard.PROF_PAGER, "");
     }
 
-    private static synchronized void tryTap(ClassLoader cl) {
-        if (HookGuard.settled(HookGuard.PROF_TAP)) return;
-        Class<?> b = HookGuard.find(HookGuard.PROF_TAP, BOTTOM, cl);
-        if (b == null) return;
-        Class<?> t = HookGuard.find(HookGuard.PROF_TAP, TABVIEW, cl);
-        if (t == null) return;
-        try {
-            bottomCls = b;
-            tabViewCls = t;
-            XposedBridge.hookMethod(View.class.getDeclaredMethod("performClick"), TAP_HOOK);
-        } catch (Throwable e) {
-            bottomCls = null;
-            tabViewCls = null;
-            HookGuard.miss(HookGuard.PROF_TAP, "View.performClick 挂不上：" + e);
-            return;
-        }
-        HookGuard.ok(HookGuard.PROF_TAP, "");
-    }
-
-    /** v 下面（最多 8 层）有没有文字正好是「我」的 TextView。点击时才调，不分配对象。 */
-    private static boolean hasMe(View v, int depth) {
-        if (v instanceof TextView && TextUtils.equals(((TextView) v).getText(), ME)) return true;
-        if (depth >= 8 || !(v instanceof ViewGroup)) return false;
-        ViewGroup g = (ViewGroup) v;
-        for (int i = 0, n = g.getChildCount(); i < n; i++) {
-            if (hasMe(g.getChildAt(i), depth + 1)) return true;
-        }
-        return false;
-    }
-
+    /** 用户点了页内标签（作品 / 日常 / 推荐 / 收藏 / 喜欢……）：只记时刻。 */
     private static final class TapHook extends XC_MethodHook {
         @Override
         protected void beforeHookedMethod(MethodHookParam p) {
             try {
-                if (!DanmakuHook.cfg.profFav) return;
-                Object o = p.thisObject;
-                Class<?> tv = tabViewCls, b = bottomCls;
-                if (tv == null || b == null) return;
-                if (tv.isInstance(o)) {
-                    userAt = SystemClock.uptimeMillis(); // 用户自己点了页内标签（作品 / 喜欢……）
-                } else if (b.isInstance(o)) {
-                    armedAt = hasMe((View) o, 0) ? SystemClock.uptimeMillis() : 0L; // 点「我」：开窗口；点别的底部标签：关窗口
-                }
+                userAt = SystemClock.uptimeMillis();
             } catch (Throwable ignored) {
             }
         }
@@ -155,14 +102,10 @@ final class ProfHook {
         @Override
         protected void beforeHookedMethod(MethodHookParam p) {
             try {
-                long t = armedAt;
-                if (t == 0L || !DanmakuHook.cfg.profFav) return;
+                if (!DanmakuHook.cfg.profFav) return;
                 Class<?> k = pagerCls;
                 if (k == null || !k.isInstance(p.thisObject)) return;
-                Object a = p.args[0];
-                if (!(a instanceof Integer) || ((Integer) a).intValue() != 0) return;
-                long now = SystemClock.uptimeMillis();
-                if (now - t > WINDOW_MS || now - userAt < USER_MS) return;
+                if (SystemClock.uptimeMillis() - userAt < USER_MS) return; // 用户自己点的：放过
                 p.args[0] = LAST;
                 if (p.args.length > 1) p.args[1] = Boolean.FALSE; // 不演滑动动画
             } catch (Throwable ignored) {
