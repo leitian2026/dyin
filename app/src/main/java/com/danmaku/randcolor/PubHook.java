@@ -48,10 +48,11 @@ import de.robv.android.xposed.XposedBridge;
  *
  * 做法（1.28.0）：
  *  - bind（after）：取 Aweme 的发布时间 / 地点 / 总时长；按类型取这一页的根；往下找 AwemeIntroInfoLayout。
- *    ① 文案上顶（设置页「文案下方空白行」，配置键 blankH，0 = 不动，-1 = 默认 37 sp 高，其余每档 2 px）：把整个 AwemeIntroInfoLayout
- *       往上平移（translationY），作者声明、文案一起上移，下面留出空位给发布地和时长（两个浮层是浮在页面上的，本身不占位置）。
+ *    ① 空白行（设置页「文案下方空白行」，配置键 blankH，0 = 不动，-1 = 默认 37 sp 高，其余每档 2 px）：落在文案和作者声明中间。
+ *       把文案所在的直接子控件和它上面的所有直接子控件往上平移（translationY），文案后面的作者声明等不动，
+ *       文案和声明之间留出空位给发布地和时长（两个浮层是浮在页面上的，本身不占位置）；平移时关掉容器和容器父级的 clipChildren，免得被裁。
  *       入口是当年（1.26.1）放发布信息那一行的 pub.text（DmtTextView#setText 的 after）：文案每次设文字，沿父级找 AwemeIntroInfoLayout；
- *       另外文案控件布局完成时再来一次（第一次设文字时容器还没就位）。不往容器里加 View（1.28.0 ～ 1.28.3 试过，没有效果）；没有新钩子。
+ *       另外文案控件布局完成时再来一次（第一次设文字时容器还没就位）。不往容器里加 View（1.28.0 ～ 1.28.3 试过，没有效果），也不整块上移（1.28.4）；没有新钩子。
  *    ② 发布信息、时长两个文字浮层直接盖在页面根（VideoViewHolderRootView）上，位置可以在全屏任意调（左 / 上，单位 dp，
  *       在抖音里用位置浮窗拖）；不再放进容器、也不再有行距 / 平移的逻辑。每页的根各带一份，换视频就是同一页再 bind 一次，覆盖就行。
  *       页面根的子控件都叠在 (0,0)、带 FrameLayout 才有的 gravity（视图树 lp[matchxmatch 重力17]），按 FrameLayout 往里加；加在最后一个，
@@ -794,7 +795,9 @@ final class PubHook {
     }
 
     /** 一个 AwemeIntroInfoLayout 上挂的东西：是否被我们上移过 / 最近设过文字的文案控件（tag，主线程用）。 */
-    private static final int BLANK_TAG = 0x7e0b0c08, INTRO_CAP_TAG = 0x7e0b0c09, BLANKW_TAG = 0x7e0b0c0a;
+    /** BLANK_TAG：被我们上移过的子控件（容器的直接子控件）；INTRO_CAP_TAG：容器上最近设过文字的文案控件；BLANKW_TAG：文案控件上挂了布局监听；
+     *  CLIP_TAG：这个 ViewGroup 的 clipChildren 是我们关掉的（要还原）。 */
+    private static final int BLANK_TAG = 0x7e0b0c08, INTRO_CAP_TAG = 0x7e0b0c09, BLANKW_TAG = 0x7e0b0c0a, CLIP_TAG = 0x7e0b0c0b;
     private static final int MAX_INTROS = 16;
     /** 见过的 AwemeIntroInfoLayout（弱引用，主线程用）；每个视频页一个，邻近页的也在。回到前台时按新配置重套空白行。 */
     private static final ArrayList<WeakReference<ViewGroup>> INTROS = new ArrayList<>();
@@ -832,26 +835,71 @@ final class PubHook {
     }
 
     /**
-     * 文案上顶（原来叫「空白行」）：把整个 AwemeIntroInfoLayout 往上平移 blankH × 2 像素（-1 = 默认，等于 37 sp 的字高；0 = 不动），
-     * 作者声明、文案一起上移，下面留出空位。用 translationY（只改绘制和触摸位置，不引起重新布局），所以不靠容器是什么布局、会不会重新测量。
-     * 只动自己动过的容器：BLANK_TAG 记着我们设过，0 时才还原，抖音自己对这个容器的平移（如果有）不去碰。
+     * 空白行：落在「文案」和「作者声明」中间。做法（1.28.5）：不往容器里加 View（1.28.0 ～ 1.28.3 试过，没有效果），
+     * 也不再整块上移（1.28.4：作者声明跟着一起上去了，空位出现在声明下面）；改成只把「文案所在的直接子控件，和它上面的所有直接子控件」
+     * （作者名行、文案……）各自往上平移 blankH × 2 像素（-1 = 默认，等于 37 sp 的字高；0 = 不动、设过的还原），
+     * 文案后面的子控件（作者声明、合集 / 相关搜索条等）不动。于是文案和作者声明之间多出 blankH × 2 像素的空位。
+     * 依据（TextRec 40.7.0，textrec-tasks-20261023-084806）：容器是竖直 LinearLayout，文案（FeedDescRootLayout）是第 20 个直接子控件，
+     * 作者声明行（LinearLayout，里面是 FeedWarnForceCenterTextView）是第 27 个，在文案后面。
+     * 用 translationY（只改绘制和触摸位置，不引起重新布局），所以不靠容器会不会重新测量；容器的父级是 MeasureOnceCheckDrawChildFrameLayout，
+     * 名字像是只测一次，这也是不加 View 的原因（推测，没有证据）。
+     * 子控件被平移出容器上沿后，会被容器 / 容器父级的 clipChildren 裁掉（Android 默认裁），所以平移时把这两个 ViewGroup 的 clipChildren 关掉，
+     * 回到 0 时还原（CLIP_TAG 记着是我们关的）。
+     * 只动自己动过的子控件：BLANK_TAG 记着我们设过，还原时才清；抖音自己对这些子控件的平移（如果有，比如展开文案的动画）会和我们互相覆盖。
+     * 找不到文案所在的子控件时什么都不动（也不上移）。
      */
     private static void applyBlank(ViewGroup intro) {
+        float ty = 0f;
+        int split = -1;
         int bh = DanmakuHook.cfg.blankH;
-        boolean ours = intro.getTag(BLANK_TAG) != null;
-        if (bh == 0) {
-            if (ours) {
-                intro.setTranslationY(0f);
-                intro.setTag(BLANK_TAG, null);
+        if (bh != 0) {
+            Object o = intro.getTag(INTRO_CAP_TAG);
+            View c = o instanceof View ? childOf(intro, (View) o) : null;
+            if (c != null) split = intro.indexOfChild(c);
+            if (split >= 0) {
+                float h = bh < 0
+                        ? TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, DanmakuConfig.BLANK_DEFAULT_SP, intro.getResources().getDisplayMetrics())
+                        : bh * 2f;
+                ty = -Math.round(h);
             }
-            return;
         }
-        float h = bh < 0
-                ? TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, DanmakuConfig.BLANK_DEFAULT_SP, intro.getResources().getDisplayMetrics())
-                : bh * 2f;
-        float ty = -Math.round(h);
-        if (intro.getTranslationY() != ty) intro.setTranslationY(ty);
-        if (!ours) intro.setTag(BLANK_TAG, Boolean.TRUE);
+        ViewParent par = intro.getParent();
+        ViewGroup up = par instanceof ViewGroup ? (ViewGroup) par : null;
+        if (ty != 0f) {
+            clipOff(intro);
+            if (up != null) clipOff(up);
+        } else {
+            clipRestore(intro);
+            if (up != null) clipRestore(up);
+        }
+        int n = intro.getChildCount();
+        for (int i = 0; i < n; i++) {
+            View ch = intro.getChildAt(i);
+            boolean mine = ch.getTag(BLANK_TAG) != null;
+            if (ty != 0f && i <= split) {
+                if (ch.getTranslationY() != ty) ch.setTranslationY(ty);
+                if (!mine) ch.setTag(BLANK_TAG, Boolean.TRUE);
+            } else if (mine) { // 不在上移范围了（开关关了 / 子控件顺序变了）：还原
+                ch.setTranslationY(0f);
+                ch.setTag(BLANK_TAG, null);
+            }
+        }
+    }
+
+    /** 关掉 g 的 clipChildren（只在它原来是开着的时候，并记下是我们关的）。 */
+    private static void clipOff(ViewGroup g) {
+        if (g.getClipChildren()) {
+            g.setClipChildren(false);
+            g.setTag(CLIP_TAG, Boolean.TRUE);
+        }
+    }
+
+    /** 还原我们关掉的 clipChildren；不是我们关的不碰。 */
+    private static void clipRestore(ViewGroup g) {
+        if (g.getTag(CLIP_TAG) != null) {
+            g.setClipChildren(true);
+            g.setTag(CLIP_TAG, null);
+        }
     }
 
     /** 文案控件布局完成（第一次设文字时容器还没就位的补一次）：只在位置 / 大小变了时处理一次。 */
