@@ -228,13 +228,16 @@ final class DanmakuHook {
         protected void beforeHookedMethod(MethodHookParam p) {
             try {
                 DanmakuConfig c = cfg;
-                if (!c.enabled) return;
+                int bg = c.lineBg;
+                if (!c.enabled && bg <= 0) return;
                 Object[] a = p.args;
                 int kind = kindOf(a[styleIdx]);
                 if (kind == 1) { // 弹幕先画描边
-                    pendingFill = true;
+                    if (bg > 0) drawBg(p.thisObject, a[0], bg); // 文字灰色底：画在描边和字之前
+                    if (c.enabled) pendingFill = true;
                     return;
                 }
+                if (!c.enabled) return;
                 boolean pend = pendingFill;
                 pendingFill = false; // 任何一次非 Stroke 调用都会清掉标记，不会误伤别的文字
                 if (!pend || kind != 2) return;
@@ -255,6 +258,101 @@ final class DanmakuHook {
                 a[colorIdx] = box;
             } catch (Throwable ignored) {
             }
+        }
+    }
+
+    // ------------------------------------------------------------ 文字灰色底（1.29.0）
+
+    /**
+     * 弹幕的灰色底：在「Stroke 那次 paint」之前画（弹幕就是靠 Stroke → Fill 两次认出来的），位置按这条弹幕的文字框。
+     * paint 的 canvas 已经平移到这条弹幕的原点，所以文字框就是 (0, 第一行顶) ～ (最宽一行的右, 最后一行底)。
+     *
+     * 没有 TextRec 证据的部分（只按 Compose 公开接口写的，没在 40.7.0 上验证）：
+     *  - MultiParagraph 有 getLineCount() / getLineLeft(int) / getLineRight(int) / getLineTop(int) / getLineBottom(int)，没被混淆；
+     *  - paint 的第一个参数（Compose Canvas 的实现类）里有一个类型是 android.graphics.Canvas 的字段（按类型找，不依赖名字）。
+     * 任何一项对不上都安静地不画底，不影响弹幕本身。
+     * 每条弹幕的文字框按对象身份缓存（256 项直接映射，和颜色缓存同一个思路），热路径里不反射、不分配。
+     */
+    private static volatile Class<?> ncCls;
+    private static volatile Field ncF;
+    private static volatile Class<?> geoCls;
+    private static volatile Method gCount, gLeft, gRight, gTop, gBottom;
+    private static final int[] GKEY = new int[256];
+    private static final float[] GBOX = new float[256 * 4];
+
+    private static void drawBg(Object mp, Object composeCanvas, int pct) {
+        if (mp == null || composeCanvas == null) return;
+        android.graphics.Canvas nc = nativeCanvas(composeCanvas);
+        if (nc == null) return;
+        int key = System.identityHashCode(mp);
+        int slot = (key ^ (key >>> 8)) & 255;
+        int o = slot * 4;
+        if (GKEY[slot] != key) {
+            measure(mp, o);
+            GKEY[slot] = key;
+        }
+        float sd = android.content.res.Resources.getSystem().getDisplayMetrics().scaledDensity;
+        LineBg.drawBox(nc, GBOX[o], GBOX[o + 1], GBOX[o + 2], GBOX[o + 3], sd, pct);
+    }
+
+    /** Compose Canvas 实现类里类型是 android.graphics.Canvas 的字段的当前值（按类型找，类变了才重找）。 */
+    private static android.graphics.Canvas nativeCanvas(Object cc) {
+        try {
+            Class<?> k = cc.getClass();
+            if (ncCls != k) {
+                Field found = null;
+                for (Class<?> c = k; c != null && c != Object.class && found == null; c = c.getSuperclass()) {
+                    for (Field f : c.getDeclaredFields()) {
+                        if (java.lang.reflect.Modifier.isStatic(f.getModifiers())) continue;
+                        if (!android.graphics.Canvas.class.isAssignableFrom(f.getType())) continue;
+                        f.setAccessible(true);
+                        found = f;
+                        break;
+                    }
+                }
+                ncF = found;
+                ncCls = k;
+            }
+            Field f = ncF;
+            if (f == null) return null;
+            Object v = f.get(cc);
+            return v instanceof android.graphics.Canvas ? (android.graphics.Canvas) v : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 读这条弹幕的文字框写进 GBOX[o..o+3]（左、上、右、下）；读不到就写成空框（右 <= 左，LineBg.drawBox 不画）。 */
+    private static void measure(Object mp, int o) {
+        GBOX[o] = GBOX[o + 1] = GBOX[o + 2] = GBOX[o + 3] = 0f;
+        try {
+            Class<?> k = mp.getClass();
+            if (geoCls != k) {
+                geoCls = k; // 找不到也记住（gCount 留空），不会每条新弹幕都抛一次异常
+                gCount = null;
+                gCount = k.getMethod("getLineCount");
+                gLeft = k.getMethod("getLineLeft", int.class);
+                gRight = k.getMethod("getLineRight", int.class);
+                gTop = k.getMethod("getLineTop", int.class);
+                gBottom = k.getMethod("getLineBottom", int.class);
+            }
+            if (gCount == null || gLeft == null || gRight == null || gTop == null || gBottom == null) return;
+            int n = ((Number) gCount.invoke(mp)).intValue();
+            if (n <= 0) return;
+            float l = Float.MAX_VALUE, r = 0f;
+            for (int i = 0; i < n; i++) {
+                float li = ((Number) gLeft.invoke(mp, i)).floatValue(), ri = ((Number) gRight.invoke(mp, i)).floatValue();
+                if (ri <= li) continue; // 空行不算
+                if (li < l) l = li;
+                if (ri > r) r = ri;
+            }
+            if (r <= l) return;
+            GBOX[o] = l;
+            GBOX[o + 1] = ((Number) gTop.invoke(mp, 0)).floatValue();
+            GBOX[o + 2] = r;
+            GBOX[o + 3] = ((Number) gBottom.invoke(mp, n - 1)).floatValue();
+        } catch (Throwable t) {
+            GBOX[o] = GBOX[o + 1] = GBOX[o + 2] = GBOX[o + 3] = 0f;
         }
     }
 
