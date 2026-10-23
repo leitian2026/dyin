@@ -141,8 +141,8 @@ final class PubHook {
         ViewGroup intro;     // 这一页的 AwemeIntroInfoLayout；bind 时还没找到就是 null
         TextView cap;        // 容器里的文案控件
         TextView pub, time;  // 盖在页面根上的两个文字浮层（要显示时才建）
-        View bar;            // 盖在页面根上的色条（要显示时才建）
-        int barCol;          // 色条现在设的颜色（没变就不再设）
+        float slotX, slotY;  // 文案下方固定位置（页面根坐标，像素）
+        boolean slotOk;      // 上面这个位置算出来了
         int timeLen;         // 时长文字现在的字符数
         boolean timeLocked;  // 时长浮层已经锁成固定大小（文字字符数不变时每秒换字不再重新布局）
         String aid;          // 这一页现在绑的视频
@@ -201,7 +201,10 @@ final class PubHook {
                 if (!(o instanceof Rows)) return;
                 Rows rs = (Rows) o;
                 if (v == rs.pub) {
-                    if (!same) place(rs, v, true);
+                    if (!same) {
+                        place(rs, v, true);
+                        if (rs.time != null) place(rs, rs.time, false); // 时长接在发布地下面时，跟着它的高度走
+                    }
                 } else if (v == rs.time) {
                     if (!same) place(rs, v, false);
                     lockTime(rs, v);
@@ -675,6 +678,11 @@ final class PubHook {
         int px = pub ? c.pubX : c.timeX, py = pub ? c.pubY : c.timeY;
         float x = px >= 0 ? px * d : 12f * d;
         float y = py >= 0 ? py * d : rh * (pub ? 0.60f : 0.65f);
+        if (r.slotOk && anchored(c, pub)) { // 放在文案下方：发布地在上，时长接在它下面（两个都选时叠着放）
+            x = r.slotX;
+            y = r.slotY;
+            if (!pub && anchored(c, true) && r.pub != null && r.pub.getVisibility() == View.VISIBLE) y += r.pub.getHeight();
+        }
         x = Math.max(0f, Math.min(x, rw - w));
         y = Math.max(0f, Math.min(y, rh - h));
         if (v.getTranslationX() != x) v.setTranslationX(x);
@@ -795,7 +803,6 @@ final class PubHook {
 
     /** AwemeIntroInfoLayout 上挂的东西（tag，主线程用）：登记过 / 被我们上移过。 */
     private static final int BLANK_TAG = 0x7e0b0c08, INTRO_TAG = 0x7e0b0c09, BARW_TAG = 0x7e0b0c0a;
-    private static final int BAR_PX = 16;
     private static final int MAX_INTROS = 16;
     /** 见过的 AwemeIntroInfoLayout（弱引用，主线程用）；每个视频页一个，邻近页的也在。回到前台时按新配置重套上顶高度。 */
     private static final ArrayList<WeakReference<ViewGroup>> INTROS = new ArrayList<>();
@@ -870,7 +877,7 @@ final class PubHook {
                 intro.setTranslationY(0f);
                 intro.setTag(BLANK_TAG, null);
             }
-            applyBar(intro);
+            applyAnchor(intro);
             return;
         }
         float h = bh < 0
@@ -879,7 +886,7 @@ final class PubHook {
         float ty = -Math.round(h);
         if (intro.getTranslationY() != ty) intro.setTranslationY(ty);
         if (!ours) intro.setTag(BLANK_TAG, Boolean.TRUE);
-        applyBar(intro);
+        applyAnchor(intro);
     }
 
     /** 容器自己布局了：色条按它新的位置重放。 */
@@ -888,7 +895,7 @@ final class PubHook {
         public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
             try {
                 if (l == ol && t == ot && r == or && b == ob) return;
-                if (v instanceof ViewGroup) applyBar((ViewGroup) v);
+                if (v instanceof ViewGroup) applyAnchor((ViewGroup) v);
             } catch (Throwable ignored) {
             }
         }
@@ -908,58 +915,41 @@ final class PubHook {
     }
 
     /**
-     * 色条：盖在页面根上，宽度 = 容器的宽度，高 16 像素，贴在容器（上顶之后）的底边下面，也就是上顶留出的空位的顶上。
-     * 位置按「容器在页面根里的位置」算（沿父级累加 left / top / 平移）；blankH 为 0 或还没布局就藏起来。浮层不可点。
+     * 文案下方的固定位置（1.28.8，替换 1.28.6 / 1.28.7 的色条，色条已经没有了）：容器（上顶之后）的左边、底边，在页面根里的位置，
+     * 也就是上顶留出的空位的顶上。沿父级累加 left / top / 平移算出，存在 Rows 里；被选中的浮层（发布地 / 时长）不用自己的自由位置，
+     * 直接放在这里（见 place）。没上机，算不出来（容器不在这个根里、还没布局）就不用这个位置，退回自由位置。
      */
-    private static void applyBar(ViewGroup intro) {
+    private static void applyAnchor(ViewGroup intro) {
         Rows r = rowsAbove(intro);
         if (r == null) return;
         View root = r.root;
-        if (!(root instanceof ViewGroup)) return;
-        View bar = r.bar;
-        DanmakuConfig c = DanmakuHook.cfg;
-        // 开关开着、不透明度不是 0（0 = 全透明，不画），选中的那几项里有开着的（1 = 发布地，2 = 时长，3 = 两个都选）
-        boolean want = c.barOn && c.barAlpha > 0
-                && (((c.barSel & 1) != 0 && c.pubAlways) || ((c.barSel & 2) != 0 && c.timeAlways));
-        if (!want || intro.getWidth() <= 0 || intro.getHeight() <= 0) {
-            if (bar != null && bar.getVisibility() != View.GONE) bar.setVisibility(View.GONE);
-            return;
-        }
+        if (root == null) return;
+        boolean ok = intro.getWidth() > 0 && intro.getHeight() > 0;
         float x = 0f, y = 0f;
-        View v = intro;
-        while (v != root) {
-            x += v.getLeft() + v.getTranslationX();
-            y += v.getTop() + v.getTranslationY();
-            ViewParent p = v.getParent();
-            if (!(p instanceof View)) return; // 不在这个根里
-            v = (View) p;
-        }
-        if (bar == null || bar.getParent() != root) {
-            detach(bar);
-            if (bar == null) {
-                bar = new View(root.getContext());
-                bar.setClickable(false);
-                bar.setFocusable(false);
-                bar.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-                r.bar = bar;
+        if (ok) {
+            View v = intro;
+            while (v != root) {
+                x += v.getLeft() + v.getTranslationX();
+                y += v.getTop() + v.getTranslationY();
+                ViewParent p = v.getParent();
+                if (!(p instanceof View)) {
+                    ok = false; // 不在这个根里
+                    break;
+                }
+                v = (View) p;
             }
-            ((ViewGroup) root).addView(bar, new FrameLayout.LayoutParams(intro.getWidth(), BAR_PX, Gravity.TOP | Gravity.START));
         }
-        ViewGroup.LayoutParams lp = bar.getLayoutParams();
-        if (lp != null && (lp.width != intro.getWidth() || lp.height != BAR_PX)) {
-            lp.width = intro.getWidth();
-            lp.height = BAR_PX;
-            bar.setLayoutParams(lp);
-        }
-        int col = ((c.barAlpha * 255 / 100) << 24) | ((c.barColor != 0 ? c.barColor : 0xFFFFFF) & 0xFFFFFF);
-        if (col != r.barCol) { // 颜色没变就不再设（每次布局都会走到这里）
-            r.barCol = col;
-            bar.setBackgroundColor(col);
-        }
-        float ty = y + intro.getHeight();
-        if (bar.getTranslationX() != x) bar.setTranslationX(x);
-        if (bar.getTranslationY() != ty) bar.setTranslationY(ty);
-        if (bar.getVisibility() != View.VISIBLE) bar.setVisibility(View.VISIBLE);
+        y += intro.getHeight();
+        if (ok == r.slotOk && (!ok || (x == r.slotX && y == r.slotY))) return; // 没变
+        r.slotOk = ok;
+        r.slotX = x;
+        r.slotY = y;
+        placeAll(r);
+    }
+
+    /** 这个浮层是不是放在文案下方（开关开着、选中了它）。 */
+    private static boolean anchored(DanmakuConfig c, boolean pub) {
+        return c.barOn && (c.barSel & (pub ? 1 : 2)) != 0;
     }
 
     // ------------------------------------------------------------ 发布信息浮层（盖在页面根上）
