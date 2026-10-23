@@ -182,7 +182,7 @@ final class PubHook {
                     if (!same) placeAll(rs);
                     // bind 时容器还没挂进根里：根布局时（容器这时一般已经在了）补找一次，空白行和文案样式不用等第一个进度回调
                     DanmakuConfig c = DanmakuHook.cfg;
-                    if (rs.intro == null && rs.aid != null && styleOn() && ensureIntro(rs)) applyAll(rs);
+                    if (rs.intro == null && rs.aid != null && (styleOn() || c.blankH != 0 || c.barOn) && ensureIntro(rs)) applyAll(rs);
                 }
             } catch (Throwable ignored) {
             }
@@ -616,6 +616,7 @@ final class PubHook {
         ViewGroup g = root == null ? null : findIntro(root, 8);
         r.cap = null;
         r.intro = g;
+        if (g != null) adopt(g); // 兜底入口：不靠 pub.intro 也能算上顶和文案下方的位置
         return g != null;
     }
 
@@ -842,6 +843,23 @@ final class PubHook {
         HookGuard.ok(HookGuard.PUB_INTRO, m.getDeclaringClass() == ic ? "" : "挂在 " + m.getDeclaringClass().getSimpleName() + " 上，按类过滤");
     }
 
+    /**
+     * 接手一个容器（上顶 + 文案下方位置）：第一次见就登记（回到前台按新配置重套）、挂布局监听，然后套一遍。
+     * 入口有两个：pub.intro（容器挂到窗口时）和「按页面根往下找到了容器」（bind 之后 / 根第一次布局，见 ensureIntro）；
+     * 后一个是兜底：有的页面（图文帖等）容器不走 onAttachedToWindow 回调，只靠 pub.intro 位置就一直算不出来。
+     */
+    private static void adopt(ViewGroup intro) {
+        if (intro.getTag(INTRO_TAG) == null) {
+            intro.setTag(INTRO_TAG, Boolean.TRUE);
+            intro.addOnLayoutChangeListener(INTRO_LISTENER); // 布局变了（展开 / 收起文案）位置跟着重算
+            INTROS.add(new WeakReference<>(intro));
+            if (INTROS.size() > MAX_INTROS) {
+                for (int i = INTROS.size() - 1; i >= 0; i--) if (INTROS.get(i).get() == null) INTROS.remove(i);
+            }
+        }
+        applyBlank(intro);
+    }
+
     private static final class IntroHook extends XC_MethodHook {
         @Override
         protected void afterHookedMethod(MethodHookParam p) {
@@ -849,16 +867,7 @@ final class PubHook {
                 Class<?> k = introHookCls;
                 Object o = p.thisObject;
                 if (k == null || !k.isInstance(o) || !isMain()) return;
-                ViewGroup intro = (ViewGroup) o;
-                if (intro.getTag(INTRO_TAG) == null) { // 第一次见：登记，回到前台时按新配置重套
-                    intro.setTag(INTRO_TAG, Boolean.TRUE);
-                    intro.addOnLayoutChangeListener(INTRO_LISTENER); // 布局变了（展开 / 收起文案）色条跟着贴到底边
-                    INTROS.add(new WeakReference<>(intro));
-                    if (INTROS.size() > MAX_INTROS) {
-                        for (int i = INTROS.size() - 1; i >= 0; i--) if (INTROS.get(i).get() == null) INTROS.remove(i);
-                    }
-                }
-                applyBlank(intro);
+                adopt((ViewGroup) o);
             } catch (Throwable ignored) {
             }
         }
@@ -904,7 +913,7 @@ final class PubHook {
     /** 往上走到挂着 Rows 的页面根；没有（容器不在已登记的页面里）返回 null。 */
     private static Rows rowsAbove(View v) {
         View x = v;
-        for (int d = 0; d < 12; d++) {
+        for (int d = 0; d < 30; d++) {
             Object o = x.getTag(ROOT_TAG);
             if (o instanceof Rows) return (Rows) o;
             ViewParent p = x.getParent();
