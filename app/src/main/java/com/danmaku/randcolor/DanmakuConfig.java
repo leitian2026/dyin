@@ -40,6 +40,8 @@ public final class DanmakuConfig {
     public boolean liveAdjust = false;
     /** 视频文案 / 视频时长 / 发布日期地点每一行字后面的灰色底的不透明度（0～100，%）；0 = 不画。见 LineBg。 */
     public int lineBg = 70;
+    /** 灰色底的颜色（0xAARRGGBB，不透明）；0 = 默认（近黑 #101010）。不透明度仍由 lineBg 管。见 LineBg。 */
+    public int lineBgColor = 0;
     /** 模块自己决定颜色的字（弹幕随机色）的最低亮度（0～100，%，每档 5）：比这暗的颜色往白色提亮；0 = 不提亮。见 LineBg.legible。 */
     public int textLift = 30;
     /** 空白行默认高度 = 这么多 sp 的字高（blankH 为 -1 时用）。 */
@@ -84,6 +86,7 @@ public final class DanmakuConfig {
             p.setProperty("liveY", String.valueOf(liveY));
             p.setProperty("liveAdjust", String.valueOf(liveAdjust));
             p.setProperty("lineBg", String.valueOf(lineBg));
+            p.setProperty("lineBgColor", String.valueOf(lineBgColor));
             p.setProperty("textLift", String.valueOf(textLift));
             p.setProperty("blankH", String.valueOf(blankH));
             p.setProperty("barOn", String.valueOf(barOn));
@@ -199,6 +202,7 @@ public final class DanmakuConfig {
         c.liveX = parsePct(p.getProperty("liveX", "3"), 3);
         c.liveY = parsePct(p.getProperty("liveY", "10"), 10);
         c.lineBg = parsePct(p.getProperty("lineBg", "70"), 70);
+        c.lineBgColor = parseColor(p.getProperty("lineBgColor", "0"));
         c.textLift = parsePct(p.getProperty("textLift", "30"), 30);
         c.blankH = Math.max(-1, Math.min(200, parseIntOr(p.getProperty("blankH", "-1"), -1)));
         c.pubX = parsePos(p.getProperty("pubX", "-1"));
