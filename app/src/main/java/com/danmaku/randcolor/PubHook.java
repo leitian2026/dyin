@@ -48,10 +48,10 @@ import de.robv.android.xposed.XposedBridge;
  *
  * 做法（1.28.0）：
  *  - bind（after）：取 Aweme 的发布时间 / 地点 / 总时长；按类型取这一页的根；往下找 AwemeIntroInfoLayout。
- *    ① 容器里只放一个「空白行」（纯 View，高度 = blankH × 2 像素，加 1 多 2px、减 1 少 2px，0 = 不放，-1 = 默认 37 sp 高）：放在文案所在子控件的后面，
- *       也就是以前（1.26.1）发布信息那一行的位置，给文案下面留出一块空白。入口就是当年放发布信息行的那个：
- *       pub.text（DmtTextView#setText 的 after），文案控件每次设文字，沿父级找 AwemeIntroInfoLayout（1.26.1 实测是竖直 LinearLayout），
- *       在文案所在的直接子控件后面插入。不走 pub.bind 往下找容器那条路（bind 时容器还没挂进根里）；没有新钩子。
+ *    ① 文案上顶（设置页「文案下方空白行」，配置键 blankH，0 = 不动，-1 = 默认 37 sp 高，其余每档 2 px）：把整个 AwemeIntroInfoLayout
+ *       往上平移（translationY），作者声明、文案一起上移，下面留出空位给发布地和时长（两个浮层是浮在页面上的，本身不占位置）。
+ *       入口是当年（1.26.1）放发布信息那一行的 pub.text（DmtTextView#setText 的 after）：文案每次设文字，沿父级找 AwemeIntroInfoLayout；
+ *       另外文案控件布局完成时再来一次（第一次设文字时容器还没就位）。不往容器里加 View（1.28.0 ～ 1.28.3 试过，没有效果）；没有新钩子。
  *    ② 发布信息、时长两个文字浮层直接盖在页面根（VideoViewHolderRootView）上，位置可以在全屏任意调（左 / 上，单位 dp，
  *       在抖音里用位置浮窗拖）；不再放进容器、也不再有行距 / 平移的逻辑。每页的根各带一份，换视频就是同一页再 bind 一次，覆盖就行。
  *       页面根的子控件都叠在 (0,0)、带 FrameLayout 才有的 gravity（视图树 lp[matchxmatch 重力17]），按 FrameLayout 往里加；加在最后一个，
@@ -409,7 +409,11 @@ final class PubHook {
                     if (t.getTag(CAP_TAG) == null) markCaption(t);
                     styleCaption(t);
                 }
-                onCaption(t); // 空白行：沿父级找容器，放 / 调 / 撤
+                if (t.getTag(BLANKW_TAG) == null) { // 第一次设文字时容器可能还没就位：布局完成时再来一次
+                    t.setTag(BLANKW_TAG, Boolean.TRUE);
+                    t.addOnLayoutChangeListener(BLANK_LISTENER);
+                }
+                onCaption(t); // 文案上顶：沿父级找容器，上移 / 还原
             } catch (Throwable ignored) {
             }
         }
@@ -638,7 +642,7 @@ final class PubHook {
                     INTROS.remove(i);
                     continue;
                 }
-                applyBlank(g); // 空白行高度 / 开关变了：见过的容器按新配置重套
+                applyBlank(g); // 上顶高度 / 开关变了：见过的容器按新配置重套
             }
             if (DanmakuHook.cfg.vidAdjust) VidPosPanel.show(a); // 位置调节模式：盖上浮窗
             else VidPosPanel.end();
@@ -789,8 +793,8 @@ final class PubHook {
         return null;
     }
 
-    /** 一个 AwemeIntroInfoLayout 上挂的东西：它的空白行 / 最近设过文字的文案控件（tag，主线程用）。 */
-    private static final int BLANK_TAG = 0x7e0b0c08, INTRO_CAP_TAG = 0x7e0b0c09;
+    /** 一个 AwemeIntroInfoLayout 上挂的东西：是否被我们上移过 / 最近设过文字的文案控件（tag，主线程用）。 */
+    private static final int BLANK_TAG = 0x7e0b0c08, INTRO_CAP_TAG = 0x7e0b0c09, BLANKW_TAG = 0x7e0b0c0a;
     private static final int MAX_INTROS = 16;
     /** 见过的 AwemeIntroInfoLayout（弱引用，主线程用）；每个视频页一个，邻近页的也在。回到前台时按新配置重套空白行。 */
     private static final ArrayList<WeakReference<ViewGroup>> INTROS = new ArrayList<>();
@@ -809,7 +813,7 @@ final class PubHook {
 
     /**
      * 文案控件刚设了文字（pub.text 的 after，和 1.26.1 的发布信息那一行是同一个入口）：沿父级找到它所在的 AwemeIntroInfoLayout，
-     * 登记并记下这个文案控件，再按配置放 / 调 / 撤这个容器的空白行。
+     * 登记并记下这个文案控件，再按配置把这个容器上移 / 还原。
      */
     private static void onCaption(TextView cap) {
         ViewGroup intro = introOf(cap);
@@ -828,46 +832,39 @@ final class PubHook {
     }
 
     /**
-     * 空白行：高度 = blankH × 2 像素（-1 = 默认，等于 37 sp 的字高；0 = 不放，已经放了的拿掉）。纯 View，不画东西、不吃触摸。
-     * 放在文案所在的那个直接子控件后面（有作者声明时就在声明上方，没有就在声明本来的位置），已经放了的只调高度、不挪位置。
-     * 容器不是 LinearLayout（抖音改了）就不放，不硬塞。
+     * 文案上顶（原来叫「空白行」）：把整个 AwemeIntroInfoLayout 往上平移 blankH × 2 像素（-1 = 默认，等于 37 sp 的字高；0 = 不动），
+     * 作者声明、文案一起上移，下面留出空位。用 translationY（只改绘制和触摸位置，不引起重新布局），所以不靠容器是什么布局、会不会重新测量。
+     * 只动自己动过的容器：BLANK_TAG 记着我们设过，0 时才还原，抖音自己对这个容器的平移（如果有）不去碰。
      */
     private static void applyBlank(ViewGroup intro) {
         int bh = DanmakuHook.cfg.blankH;
-        Object o = intro.getTag(BLANK_TAG);
-        View v = o instanceof View ? (View) o : null;
+        boolean ours = intro.getTag(BLANK_TAG) != null;
         if (bh == 0) {
-            if (v != null) {
-                detach(v);
+            if (ours) {
+                intro.setTranslationY(0f);
                 intro.setTag(BLANK_TAG, null);
             }
             return;
         }
-        if (!(intro instanceof LinearLayout)) return;
-        int h = bh < 0
-                ? Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, DanmakuConfig.BLANK_DEFAULT_SP, intro.getResources().getDisplayMetrics()))
-                : bh * 2;
-        if (v == null || v.getParent() != intro) {
-            Object c = intro.getTag(INTRO_CAP_TAG);
-            View anchor = c instanceof View ? childOf(intro, (View) c) : null;
-            if (anchor == null) return;
-            detach(v);
-            if (v == null) {
-                v = new View(intro.getContext());
-                v.setClickable(false);
-                v.setFocusable(false);
-                v.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-                intro.setTag(BLANK_TAG, v);
-            }
-            intro.addView(v, intro.indexOfChild(anchor) + 1, new LinearLayout.LayoutParams(1, h));
-            return;
-        }
-        ViewGroup.LayoutParams lp = v.getLayoutParams();
-        if (lp != null && lp.height != h) {
-            lp.height = h;
-            v.setLayoutParams(lp);
-        }
+        float h = bh < 0
+                ? TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, DanmakuConfig.BLANK_DEFAULT_SP, intro.getResources().getDisplayMetrics())
+                : bh * 2f;
+        float ty = -Math.round(h);
+        if (intro.getTranslationY() != ty) intro.setTranslationY(ty);
+        if (!ours) intro.setTag(BLANK_TAG, Boolean.TRUE);
     }
+
+    /** 文案控件布局完成（第一次设文字时容器还没就位的补一次）：只在位置 / 大小变了时处理一次。 */
+    private static final View.OnLayoutChangeListener BLANK_LISTENER = new View.OnLayoutChangeListener() {
+        @Override
+        public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+            try {
+                if (l == ol && t == ot && r == or && b == ob) return;
+                if (v instanceof TextView) onCaption((TextView) v);
+            } catch (Throwable ignored) {
+            }
+        }
+    };
 
     // ------------------------------------------------------------ 发布信息浮层（盖在页面根上）
 
