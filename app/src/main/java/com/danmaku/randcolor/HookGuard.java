@@ -30,8 +30,8 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 final class HookGuard {
     private HookGuard() {}
 
-    static final int PAINT = 0, TIME_PROGRESS = 1, TAB = 2, PUB = 3, PUB_BIND = 4, PUB_ANCHOR = 5, DTAP_SEEN = 6, DTAP_CUT = 7, CAP_DRAW = 8, DTAP_CLICK = 9, LIVE_PAGE = 10, LIVE_ROOM = 11, PUB_INTRO = 12;
-    static final String[] IDS = {"paint", "time.progress", "tab.hide", "pub.text", "pub.bind", "pub.anchor", "dtap.seen", "dtap.cut", "cap.draw", "dtap.click", "live.page", "live.room", "pub.intro"};
+    static final int PAINT = 0, TIME_PROGRESS = 1, TAB = 2, PUB = 3, PUB_BIND = 4, PUB_ANCHOR = 5, DTAP_SEEN = 6, DTAP_CUT = 7, CAP_DRAW = 8, DTAP_CLICK = 9, LIVE_PAGE = 10, LIVE_ROOM = 11;
+    static final String[] IDS = {"paint", "time.progress", "tab.hide", "pub.text", "pub.bind", "pub.anchor", "dtap.seen", "dtap.cut", "cap.draw", "dtap.click", "live.page", "live.room"};
 
     /** 匹配规则改了就加一：已经放弃的钩子会重新试一次。 */
     private static final int RULES_REV = 2;
