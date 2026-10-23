@@ -16,6 +16,8 @@ public final class DanmakuConfig {
     public int mode = 0;
     /** 双击视频时，不点赞、不出红心，改为打开评论。 */
     public boolean dtapToComment = false;
+    /** 点底部「我」进个人主页时默认停在「喜欢」标签（最后一页）。见 ProfHook。 */
+    public boolean profFav = false;
     /** 视频时长一直显示（放在发布信息那一行的下面，没显示发布信息就放在文案下面）。 */
     public boolean timeAlways = false;
     /** 发布日期和地点一直显示（在文案下面单独一行）。 */
@@ -69,6 +71,7 @@ public final class DanmakuConfig {
             p.setProperty("enabled", String.valueOf(enabled));
             p.setProperty("mode", String.valueOf(mode));
             p.setProperty("dtapToComment", String.valueOf(dtapToComment));
+            p.setProperty("profFav", String.valueOf(profFav));
             p.setProperty("timeAlways", String.valueOf(timeAlways));
             p.setProperty("pubAlways", String.valueOf(pubAlways));
             p.setProperty("timeSize", String.valueOf(timeSize));
@@ -184,6 +187,7 @@ public final class DanmakuConfig {
     private static void fill(DanmakuConfig c, Properties p) {
         c.enabled = Boolean.parseBoolean(p.getProperty("enabled", "true").trim());
         c.dtapToComment = Boolean.parseBoolean(p.getProperty("dtapToComment", "false").trim());
+        c.profFav = Boolean.parseBoolean(p.getProperty("profFav", "false").trim());
         c.timeAlways = Boolean.parseBoolean(p.getProperty("timeAlways", "false").trim());
         c.pubAlways = Boolean.parseBoolean(p.getProperty("pubAlways", "false").trim());
         c.timeSize = parseSize(p.getProperty("timeSize", "20"), 20);
