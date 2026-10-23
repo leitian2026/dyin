@@ -230,7 +230,7 @@ final class PubHook {
 
     /**
      * pub.bind：挂 VideoViewHolder 里第一个参数是 Aweme 的 bind（bind(Aweme) 和 bind(Aweme, int) 都挂，处理是幂等的）。
-     * 四个类（VideoViewHolder / Aweme / VideoViewHolderRootView / AwemeIntroInfoLayout）都按名字找，缺哪个都算「类没找到」（等，不放弃）；
+     * 三个类（VideoViewHolder / Aweme / VideoViewHolderRootView）都按名字找，缺哪个都算「类没找到」（等，不放弃）；
      * Aweme 的 aid（String）和 createTime（long / int）必须有，缺了就 miss（字段被混淆了，需要重新用 TextRec 看 Aweme 的字段快照）；
      * ipAttribution、city、duration 没有或类型不对就少显示一段。
      */
@@ -242,8 +242,6 @@ final class PubHook {
         if (aw == null) return;
         Class<?> rc = HookGuard.find(HookGuard.PUB_BIND, ROOT, cl, ctx);
         if (rc == null) return;
-        Class<?> ic = HookGuard.find(HookGuard.PUB_BIND, INTRO, cl, ctx);
-        if (ic == null) return;
         Field a, t;
         try {
             a = aw.getDeclaredField("aid");
@@ -275,7 +273,6 @@ final class PubHook {
                 if (pt.length == 0 || pt[0] != aw) continue;
                 if (n == 0) { // 类和字段先放好再挂钩，回调一来就能用
                     rootCls = rc;
-                    introCls = ic;
                     fAid = a;
                     fTime = t;
                     fIp = ip;
@@ -320,15 +317,26 @@ final class PubHook {
         }
     }
 
-    /** pub.anchor：只找视频文案控件的两个类（ScrollMentionTextView 和 MentionTextView），不挂钩；找不到文案样式就不生效，发布信息 / 时长照常。 */
+    /**
+     * pub.anchor：只找类，不挂钩：视频文案控件的两个类（ScrollMentionTextView 和 MentionTextView）、文案容器 AwemeIntroInfoLayout、
+     * 页面根 VideoViewHolderRootView（都是类名没混淆，TextRec 40.7.0 的记录）。文案上顶和文案下方位置靠这四个类，
+     * 不再靠 pub.bind 装成功（1.30.0 的容器入口依赖 introCls / rootCls，它们原来是 tryBind 顺带记的）。
+     * 找不到就不生效，发布信息 / 时长照常。rootCls 同时是 tryBind 的前提，两边找到的是同一个类。
+     */
     private static void tryAnchor(ClassLoader cl, ClassLoader ctx) {
         if (HookGuard.settled(HookGuard.PUB_ANCHOR)) return;
         Class<?> m = HookGuard.find(HookGuard.PUB_ANCHOR, MENTION, cl, ctx);
         if (m == null) return;
         Class<?> c = HookGuard.find(HookGuard.PUB_ANCHOR, CAPTION, cl, ctx);
         if (c == null) return;
+        Class<?> ic = HookGuard.find(HookGuard.PUB_ANCHOR, INTRO, cl, ctx);
+        if (ic == null) return;
+        Class<?> rc = HookGuard.find(HookGuard.PUB_ANCHOR, ROOT, cl, ctx);
+        if (rc == null) return;
         capMention = m;
         captionCls = c;
+        introCls = ic;
+        rootCls = rc;
         HookGuard.ok(HookGuard.PUB_ANCHOR, "");
     }
 
