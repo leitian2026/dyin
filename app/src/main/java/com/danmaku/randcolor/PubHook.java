@@ -48,8 +48,10 @@ import de.robv.android.xposed.XposedBridge;
  *
  * 做法（1.28.0）：
  *  - bind（after）：取 Aweme 的发布时间 / 地点 / 总时长；按类型取这一页的根；往下找 AwemeIntroInfoLayout。
- *    ① 容器里只放一个「空白行」（纯 View，高度 = blankH × 2 像素，加 1 多 2px、减 1 少 2px，0 = 不放）：放在文案所在子控件的后面，
- *       也就是以前发布信息那一行的位置，给文案下面留出一块空白，用的还是这一个 pub.bind 钩子拿到的容器，没有新钩子。
+ *    ① 文案上顶（设置页「文案下方空白行」，配置键 blankH，0 = 不动，-1 = 默认 37 sp 高，其余每档 2 px）：把整个 AwemeIntroInfoLayout
+ *       往上平移（translationY），作者声明、文案一起上移，下面留出空位给发布地和时长（两个浮层是浮在页面上的，本身不占位置）。
+ *       钩子 pub.intro：AwemeIntroInfoLayout#onAttachedToWindow 的 after，this 就是这一页的容器（见 tryIntro）。不靠 bind 往下找、
+ *       不靠文案 setText，每个页面的容器每次出现都会走到。不往容器里加 View（1.28.0 ～ 1.28.3 试过，没有效果）。
  *    ② 发布信息、时长两个文字浮层直接盖在页面根（VideoViewHolderRootView）上，位置可以在全屏任意调（左 / 上，单位 dp，
  *       在抖音里用位置浮窗拖）；不再放进容器、也不再有行距 / 平移的逻辑。每页的根各带一份，换视频就是同一页再 bind 一次，覆盖就行。
  *       页面根的子控件都叠在 (0,0)、带 FrameLayout 才有的 gravity（视图树 lp[matchxmatch 重力17]），按 FrameLayout 往里加；加在最后一个，
@@ -85,7 +87,7 @@ final class PubHook {
     private static final int CAPW_TAG = 0x7e0b0c07;   // 文案控件上挂了布局监听
 
     /** 发布信息 / 时长默认字色（配置里 pubColor / timeColor 为 0 时用）。 */
-    private static final int ROW_COLOR = 0xCCFFFFFF, TIME_COLOR = 0xFFFFFFFF, BAR_COLOR = 0x66FFFFFF;
+    private static final int ROW_COLOR = 0xCCFFFFFF, TIME_COLOR = 0xFFFFFFFF;
 
     /** 安装阶段找好的类（回调里只读）。 */
     private static volatile Class<?> introCls, rootCls, capMention, captionCls;
@@ -138,8 +140,8 @@ final class PubHook {
         View root;
         ViewGroup intro;     // 这一页的 AwemeIntroInfoLayout；bind 时还没找到就是 null
         TextView cap;        // 容器里的文案控件
-        View blank;          // 容器里的空白行（要显示时才建）
         TextView pub, time;  // 盖在页面根上的两个文字浮层（要显示时才建）
+        View bar;            // 盖在页面根上的色条（blankH 不为 0 时才建）
         String aid;          // 这一页现在绑的视频
         Info info;
         long lastSec = -1, lastDsec = -2; // 时长现在显示的秒数（-1 = 还没显示过）
@@ -170,7 +172,13 @@ final class PubHook {
         public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
             try {
                 Object o = v.getTag(ROOT_TAG);
-                if (o instanceof Rows) placeAll((Rows) o);
+                if (o instanceof Rows) {
+                    Rows rs = (Rows) o;
+                    placeAll(rs);
+                    // bind 时容器还没挂进根里：根布局时（容器这时一般已经在了）补找一次，空白行和文案样式不用等第一个进度回调
+                    DanmakuConfig c = DanmakuHook.cfg;
+                    if (rs.intro == null && rs.aid != null && styleOn() && ensureIntro(rs)) applyAll(rs);
+                }
             } catch (Throwable ignored) {
             }
         }
@@ -203,6 +211,7 @@ final class PubHook {
         tryAnchor(cl, ctx);
         tryText(cl, ctx);
         tryDraw(cl, ctx);
+        tryIntro(cl, ctx);
     }
 
     /**
@@ -238,13 +247,7 @@ final class PubHook {
         }
         Field ip = stringField(aw, "ipAttribution");
         Field city = stringField(aw, "city");
-        Field dur = null;
-        try {
-            dur = aw.getDeclaredField("duration");
-            if (dur.getType() != long.class && dur.getType() != int.class) dur = null;
-        } catch (Throwable ignored) {
-            dur = null;
-        }
+        Field dur = durationField(aw);
         int n = 0;
         try {
             a.setAccessible(true);
@@ -277,6 +280,21 @@ final class PubHook {
         }
         if (n > 0) HookGuard.ok(HookGuard.PUB_BIND, ip == null ? "没有地点字段，只显示日期" : (city == null ? "没有城市字段，只显示到省" : (dur == null ? "没有 duration 字段，时长要等第一个进度回调才显示" : "")));
         else HookGuard.miss(HookGuard.PUB_BIND, "VideoViewHolder 里没有 bind(Aweme, …)（翻页绑定入口变了，需要重新追踪）");
+    }
+
+    /** Aweme.duration（毫秒，TextRec 快照 17857）：本类找不到就往父类找；long / int / Long / Integer 都收。 */
+    private static Field durationField(Class<?> aw) {
+        for (Class<?> k = aw; k != null && k != Object.class; k = k.getSuperclass()) {
+            try {
+                Field f = k.getDeclaredField("duration");
+                Class<?> t = f.getType();
+                return t == long.class || t == int.class || t == Long.class || t == Integer.class ? f : null;
+            } catch (NoSuchFieldException ignored) {
+            } catch (Throwable e) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private static Field stringField(Class<?> c, String name) {
@@ -373,7 +391,8 @@ final class PubHook {
         Field fi = fIp, fc = fCity, fd = fDur;
         Object ip = fi == null ? null : fi.get(aw);
         Object ct = fc == null ? null : fc.get(aw);
-        long dur = fd == null ? -1 : fd.getLong(aw);
+        Object dv = fd == null ? null : fd.get(aw);
+        long dur = dv instanceof Number ? ((Number) dv).longValue() : -1;
         return new Info(sec, ip instanceof String ? (String) ip : null, ct instanceof String ? (String) ct : null, dur);
     }
 
@@ -598,7 +617,6 @@ final class PubHook {
                 if (cap.getTag(CAP_TAG) == null) markCaption(cap);
                 styleCaption(cap);
             }
-            updateBlank(r);
         }
         updatePub(r);
         updateTimeInit(r);
@@ -615,6 +633,14 @@ final class PubHook {
                     continue;
                 }
                 applyAll(r);
+            }
+            for (int i = INTROS.size() - 1; i >= 0; i--) {
+                ViewGroup g = INTROS.get(i).get();
+                if (g == null) {
+                    INTROS.remove(i);
+                    continue;
+                }
+                applyBlank(g); // 上顶高度 / 开关变了：见过的容器按新配置重套
             }
             if (DanmakuHook.cfg.vidAdjust) VidPosPanel.show(a); // 位置调节模式：盖上浮窗
             else VidPosPanel.end();
@@ -753,73 +779,164 @@ final class PubHook {
 
     // ------------------------------------------------------------ 空白行（在容器里，文案后面）
 
-    /** cap 在 intro 下面的那个直接子控件；找不到返回 null。 */
-    private static View childOf(ViewGroup intro, View cap) {
-        View child = cap;
-        for (int d = 0; d < 8; d++) {
-            ViewParent par = child.getParent();
-            if (par == intro) return child;
-            if (!(par instanceof View)) return null;
-            child = (View) par;
+    /** AwemeIntroInfoLayout 上挂的东西（tag，主线程用）：登记过 / 被我们上移过。 */
+    private static final int BLANK_TAG = 0x7e0b0c08, INTRO_TAG = 0x7e0b0c09, BARW_TAG = 0x7e0b0c0a;
+    private static final int BAR_PX = 16, BAR_COLOR = 0x66FFFFFF;
+    private static final int MAX_INTROS = 16;
+    /** 见过的 AwemeIntroInfoLayout（弱引用，主线程用）；每个视频页一个，邻近页的也在。回到前台时按新配置重套上顶高度。 */
+    private static final ArrayList<WeakReference<ViewGroup>> INTROS = new ArrayList<>();
+    /** pub.intro 挂的是不是这个类的实例（挂的方法可能是父类的，按类过滤）。 */
+    private static volatile Class<?> introHookCls;
+
+    private static final XC_MethodHook INTRO_HOOK = new IntroHook();
+
+    /**
+     * pub.intro：AwemeIntroInfoLayout 挂到窗口时（onAttachedToWindow，after）把这个容器按配置上移。
+     * 依据：TextRec 40.7.0 的追踪，每个视频页的这个容器每次出现都会走 onAttachedToWindow（冷启动 +1384，划一下 23028，在 bind 之后），
+     * 回调的 this 就是容器本身，不用找、不用等文案、不用等进度。方法可能不在这个类里声明（继承自父类），所以沿父类往上找第一个声明它的，
+     * 回调里按「是不是 AwemeIntroInfoLayout」过滤。
+     */
+    private static void tryIntro(ClassLoader cl, ClassLoader ctx) {
+        if (HookGuard.settled(HookGuard.PUB_INTRO)) return;
+        Class<?> ic = HookGuard.find(HookGuard.PUB_INTRO, INTRO, cl, ctx);
+        if (ic == null) return;
+        Method m = null;
+        try {
+            for (Class<?> k = ic; k != null && m == null; k = k.getSuperclass()) {
+                try {
+                    m = k.getDeclaredMethod("onAttachedToWindow");
+                } catch (NoSuchMethodException ignored) {
+                }
+            }
+            if (m == null) {
+                HookGuard.miss(HookGuard.PUB_INTRO, "AwemeIntroInfoLayout 往上没有 onAttachedToWindow（视图基类变了，需要重新追踪）");
+                return;
+            }
+            introHookCls = ic; // 类先放好再挂钩，回调一来就能用
+            XposedBridge.hookMethod(m, INTRO_HOOK);
+        } catch (Throwable e) {
+            HookGuard.waitFail(HookGuard.PUB_INTRO);
+            return;
         }
-        return null;
+        HookGuard.ok(HookGuard.PUB_INTRO, m.getDeclaringClass() == ic ? "" : "挂在 " + m.getDeclaringClass().getSimpleName() + " 上，按类过滤");
     }
 
-    /** 空白行放在哪个子控件后面：文案所在的那个直接子控件；找不到文案控件就放在容器里第一个不是空白行的子控件后面。 */
-    private static View anchorChild(Rows r) {
-        ViewGroup intro = r.intro;
-        if (intro == null) return null;
-        TextView cap = capOf(r);
-        if (cap != null) {
-            View c = childOf(intro, cap);
-            if (c != null) return c;
+    private static final class IntroHook extends XC_MethodHook {
+        @Override
+        protected void afterHookedMethod(MethodHookParam p) {
+            try {
+                Class<?> k = introHookCls;
+                Object o = p.thisObject;
+                if (k == null || !k.isInstance(o) || !isMain()) return;
+                ViewGroup intro = (ViewGroup) o;
+                if (intro.getTag(INTRO_TAG) == null) { // 第一次见：登记，回到前台时按新配置重套
+                    intro.setTag(INTRO_TAG, Boolean.TRUE);
+                    intro.addOnLayoutChangeListener(INTRO_LISTENER); // 布局变了（展开 / 收起文案）色条跟着贴到底边
+                    INTROS.add(new WeakReference<>(intro));
+                    if (INTROS.size() > MAX_INTROS) {
+                        for (int i = INTROS.size() - 1; i >= 0; i--) if (INTROS.get(i).get() == null) INTROS.remove(i);
+                    }
+                }
+                applyBlank(intro);
+            } catch (Throwable ignored) {
+            }
         }
-        for (int i = 0, n = intro.getChildCount(); i < n; i++) {
-            View c = intro.getChildAt(i);
-            if (c != r.blank) return c;
+    }
+
+    /**
+     * 文案上顶（原来叫「空白行」）：把整个 AwemeIntroInfoLayout 往上平移 blankH × 2 像素（-1 = 默认，等于 37 sp 的字高；0 = 不动），
+     * 作者声明、文案一起上移，下面留出空位。用 translationY（只改绘制和触摸位置，不引起重新布局），所以不靠容器是什么布局、会不会重新测量。
+     * 只动自己动过的容器：BLANK_TAG 记着我们设过，0 时才还原，抖音自己对这个容器的平移（如果有）不去碰。
+     */
+    private static void applyBlank(ViewGroup intro) {
+        int bh = DanmakuHook.cfg.blankH;
+        boolean ours = intro.getTag(BLANK_TAG) != null;
+        if (bh == 0) {
+            if (ours) {
+                intro.setTranslationY(0f);
+                intro.setTag(BLANK_TAG, null);
+            }
+            return;
+        }
+        float h = bh < 0
+                ? TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, DanmakuConfig.BLANK_DEFAULT_SP, intro.getResources().getDisplayMetrics())
+                : bh * 2f;
+        float ty = -Math.round(h);
+        if (intro.getTranslationY() != ty) intro.setTranslationY(ty);
+        if (!ours) intro.setTag(BLANK_TAG, Boolean.TRUE);
+        applyBar(intro);
+    }
+
+    /** 容器自己布局了：色条按它新的位置重放。 */
+    private static final View.OnLayoutChangeListener INTRO_LISTENER = new View.OnLayoutChangeListener() {
+        @Override
+        public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+            try {
+                if (v instanceof ViewGroup) applyBar((ViewGroup) v);
+            } catch (Throwable ignored) {
+            }
+        }
+    };
+
+    /** 往上走到挂着 Rows 的页面根；没有（容器不在已登记的页面里）返回 null。 */
+    private static Rows rowsAbove(View v) {
+        View x = v;
+        for (int d = 0; d < 12; d++) {
+            Object o = x.getTag(ROOT_TAG);
+            if (o instanceof Rows) return (Rows) o;
+            ViewParent p = x.getParent();
+            if (!(p instanceof View)) return null;
+            x = (View) p;
         }
         return null;
     }
 
     /**
-     * 色条：宽度撑满容器，高度 = blankH × 2 像素（默认 16，0 = 不放，已经放了的拿掉），颜色 = barColor（0 = 半透明白）。不吃触摸。
-     * 没有 LinearLayout 的容器（抖音改了）就不放，不硬塞。
+     * 色条：盖在页面根上，宽度 = 容器的宽度，高 16 像素，贴在容器（上顶之后）的底边下面，也就是上顶留出的空位的顶上。
+     * 位置按「容器在页面根里的位置」算（沿父级累加 left / top / 平移）；blankH 为 0 或还没布局就藏起来。浮层不可点。
      */
-    private static void updateBlank(Rows r) {
-        ViewGroup intro = r.intro;
-        if (intro == null) return;
-        int h = Math.max(0, DanmakuHook.cfg.blankH) * 2;
-        View v = r.blank;
-        if (h == 0) {
-            if (v != null) {
-                detach(v);
-                r.blank = null;
-            }
+    private static void applyBar(ViewGroup intro) {
+        Rows r = rowsAbove(intro);
+        if (r == null) return;
+        View root = r.root;
+        if (!(root instanceof ViewGroup)) return;
+        View bar = r.bar;
+        if (DanmakuHook.cfg.blankH == 0 || intro.getWidth() <= 0 || intro.getHeight() <= 0) {
+            if (bar != null && bar.getVisibility() != View.GONE) bar.setVisibility(View.GONE);
             return;
+        }
+        float x = 0f, y = 0f;
+        View v = intro;
+        while (v != root) {
+            x += v.getLeft() + v.getTranslationX();
+            y += v.getTop() + v.getTranslationY();
+            ViewParent p = v.getParent();
+            if (!(p instanceof View)) return; // 不在这个根里
+            v = (View) p;
+        }
+        if (bar == null || bar.getParent() != root) {
+            detach(bar);
+            if (bar == null) {
+                bar = new View(root.getContext());
+                bar.setClickable(false);
+                bar.setFocusable(false);
+                bar.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+                r.bar = bar;
+            }
+            ((ViewGroup) root).addView(bar, new FrameLayout.LayoutParams(intro.getWidth(), BAR_PX, Gravity.TOP | Gravity.START));
+        }
+        ViewGroup.LayoutParams lp = bar.getLayoutParams();
+        if (lp != null && (lp.width != intro.getWidth() || lp.height != BAR_PX)) {
+            lp.width = intro.getWidth();
+            lp.height = BAR_PX;
+            bar.setLayoutParams(lp);
         }
         int col = DanmakuHook.cfg.barColor != 0 ? DanmakuHook.cfg.barColor : BAR_COLOR;
-        if (!(intro instanceof LinearLayout)) return;
-        if (v == null || v.getParent() != intro) {
-            View anchor = anchorChild(r);
-            if (anchor == null) return;
-            detach(v);
-            if (v == null) {
-                v = new View(intro.getContext());
-                v.setClickable(false);
-                v.setFocusable(false);
-                v.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-                r.blank = v;
-            }
-            v.setBackgroundColor(col);
-            intro.addView(v, intro.indexOfChild(anchor) + 1, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h));
-            return;
-        }
-        v.setBackgroundColor(col);
-        ViewGroup.LayoutParams lp = v.getLayoutParams();
-        if (lp != null && lp.height != h) {
-            lp.height = h;
-            v.setLayoutParams(lp);
-        }
+        bar.setBackgroundColor(col);
+        float ty = y + intro.getHeight();
+        if (bar.getTranslationX() != x) bar.setTranslationX(x);
+        if (bar.getTranslationY() != ty) bar.setTranslationY(ty);
+        if (bar.getVisibility() != View.VISIBLE) bar.setVisibility(View.VISIBLE);
     }
 
     // ------------------------------------------------------------ 发布信息浮层（盖在页面根上）
@@ -949,7 +1066,7 @@ final class PubHook {
         WeakReference<Rows> w = PAGES.get(id);
         Rows r = w == null ? null : w.get();
         if (r == null) return;
-        if (r.intro == null && (c.blankH > 0 || styleOn()) && ensureIntro(r)) applyAll(r);
+        if (r.intro == null && styleOn() && ensureIntro(r)) applyAll(r);
         if (!c.timeAlways) return;
         long sec = pos > 0 ? pos / 1000 : 0;
         long dsec = dur > 0 ? dur / 1000 : -1;
