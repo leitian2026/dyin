@@ -23,6 +23,11 @@
 ## 使用
 设置页的内容按功能折叠成一个个分组（点标题展开，展开一个其他自动收起；有总开关的分组不用展开就能开关）。前提：LSPosed 里启用模块、作用域勾选抖音、强杀抖音重开；改完点底部「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
+## 1.30.1：上顶 / 文案下方位置不再依赖 pub.bind 装成功
+
+- **问题**：1.30.0 的容器入口（`pub.text`）要用 `introCls`（`AwemeIntroInfoLayout`）和 `rootCls`（`VideoViewHolderRootView`），这两个类原来是 `tryBind` 装 `pub.bind` 时顺带记下的；`pub.bind` 没装上（类没找到、Aweme 字段变了）时它们是 null，上顶和文案下方位置会安静地一起失效。旧版 `pub.intro` 自己找容器类，没有这个依赖。
+- **做法**：`tryAnchor`（`pub.anchor`，只找类不挂钩）现在找四个类：两个文案类、`AwemeIntroInfoLayout`、`VideoViewHolderRootView`，并记下 `introCls` / `rootCls`；`tryBind` 不再找也不再记 `introCls`，只找自己要用的三个类（holder / Aweme / 页面根），`rootCls` 两边按同一个类名找、值相同。没有新钩子，没编译、没上机。
+
 ## 1.30.0：容器只从文案控件来（图文帖不上顶、发布地不在文案下方）
 
 - **问题**：首页推荐里的图文帖（带「文字」标签），文案有灰色底（文案那条链通），但没上顶、发布地也不在文案下方（容器那条链没走通）。旧版容器有两个找法：`pub.intro`（`AwemeIntroInfoLayout#onAttachedToWindow`）和从页面根往下找 8 层；而文案的 `setText` 钩子其实已经顺着父级认出了容器（`insideIntro`），认完就丢了。
