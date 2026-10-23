@@ -14,9 +14,8 @@ import java.util.ArrayList;
 import de.robv.android.xposed.XC_MethodHook;
 
 /**
- * 把"点赞"改成"打开评论"。两个入口，各有开关，每个入口只钩一个方法：
- *  1) 右侧爱心按钮（likeBtnToComment）：拦掉 FeedDiggPresenter#LJJJJJL，改为点一下评论按钮。
- *  2) 双击视频（dtapToComment）：在 MonitorScrollFrameLayout.onInterceptTouchEvent 里识别双击并拦住（dtap.seen + dtap.cut），改为点一下评论按钮；
+ * 把"双击点赞"改成"打开评论"（开关 dtapToComment）。1.29.0 起不再有「右侧爱心按钮改评论」（FeedDiggPresenter#LJJJJJL）。
+ * 双击视频：在 MonitorScrollFrameLayout.onInterceptTouchEvent 里识别双击并拦住（dtap.seen + dtap.cut），改为点一下评论按钮；
  *     再用 dtap.click 跳过随后的单击处理（不暂停）。三个钩子的类名、方法名都没混淆。
  *
  * 1.26.4 起不再有混淆名的双击兜底（BaseListFragmentPanel#LLLIILIL）：它在前面这条路径失效时照样能打开评论，
@@ -24,16 +23,13 @@ import de.robv.android.xposed.XC_MethodHook;
  * 现在这条路径失效 = 双击恢复成点赞，一眼就能看出来。（LLLIILIL 的追踪证据：40.7.0 里一次双击 X.06y9.onTouch 只调它一次，红心和点赞都从它往下走。）
  *
  * 评论按钮的找法：contentDescription 形如"评论24，按钮"、可见面积最大的那个。
- * 找不到评论按钮时：按钮点赞照常放行；双击则不放行（双击不点赞）。
+ * 找不到评论按钮时：双击不放行（双击不点赞）。
  */
 final class CommentHook {
     private CommentHook() {}
 
     static volatile WeakReference<Activity> top = new WeakReference<>(null);
 
-    private static final String DIGG = "com.ss.android.ugc.aweme.feed.quick.presenter.FeedDiggPresenter";
-    /** 版本相关：40.7.0 里右侧爱心按钮 onClick 调到的方法。换版本后需要重新记录。 */
-    private static final String DIGG_CLICK_METHOD = "LJJJJJL";
     /**
      * 双击的稳定名路径（40.7.0，TextRec：textrec-tasks-20261020-203447 / 20261021-032906 / 20261021-093511）：
      *  - 双击在 MonitorScrollFrameLayout.onInterceptTouchEvent 里被识别：第二下 DOWN 时它的栈是
@@ -76,14 +72,10 @@ final class CommentHook {
     /** 主线程上的触摸分发：正在 MonitorScrollFrameLayout.onInterceptTouchEvent 里 / 这一次里 onDoubleTap 被调到了。 */
     private static boolean inIntercept, dtapSeen;
 
-    private static final XC_MethodHook DIGG_HOOK = new DiggHook();
     private static final XC_MethodHook SEEN_HOOK = new DtapSeenHook();
     private static final XC_MethodHook CUT_HOOK = new DtapCutHook();
 
-    /**
-     * 这两个方法名是混淆的（换版本会变），不做放宽匹配：双击入口如果只按签名 void(MotionEvent) 去猜，
-     * 猜错了会让每次触摸都打开评论，宁可不挂。找不到就放弃并记住（HookGuard），按钮点赞 / 双击点赞照常。
-     */
+    /** 三个钩子的类名、方法名都没混淆；找不到就放弃并记住（HookGuard），双击点赞照常。 */
     static void tryHook(ClassLoader cl) {
         if (cl == null) return;
         // 名字没混淆的双击路径：识别双击（系统方法）+ 在点赞之前拦住（抖音的类，类名和方法名都没混淆，不放宽匹配）
@@ -93,8 +85,6 @@ final class CommentHook {
                 "MonitorScrollFrameLayout 里没有 onInterceptTouchEvent(MotionEvent)（抖音改了这个类，需要用 TextRec 重新追踪双击时的触摸分发）", cl);
         HookGuard.hook(HookGuard.DTAP_CLICK, FEED_ROOT, voidNamed(CLICK_METHOD), CLICK_HOOK,
                 "FeedComponentsRoot 里没有 void handleSingleClick（抖音改了单击处理，需要用 TextRec 重新追踪单击暂停的调用栈）", cl);
-        HookGuard.hook(HookGuard.DIGG, DIGG, HookGuard.named(DIGG_CLICK_METHOD), DIGG_HOOK,
-                DIGG_CLICK_METHOD + " 在 FeedDiggPresenter 里没有找到（方法名是混淆的，抖音更新后会变，需要重新追踪）", cl);
     }
 
     /** 名字匹配、返回 void 的所有重载（handleSingleClick() / handleSingleClick(Float, Float) 都挂，跳过时返回 null 即可）。 */
@@ -179,30 +169,6 @@ final class CommentHook {
         }
     }
 
-    /** 右侧爱心按钮：只拦“用户点出来的”（切视频 / 绑定数据 / 服务器结果也会调到这个方法）。找不到评论按钮时放行点赞。 */
-    private static final class DiggHook extends XC_MethodHook {
-        @Override
-        protected void beforeHookedMethod(MethodHookParam p) {
-            try {
-                if (!DanmakuHook.cfg.likeBtnToComment || !fromUserInput()) return;
-                if (openComments()) p.setResult(defaultOf(((Method) p.method).getReturnType()));
-            } catch (Throwable ignored) {
-            }
-        }
-    }
-
-    private static Object defaultOf(Class<?> t) {
-        if (t == boolean.class) return Boolean.FALSE;
-        if (t == int.class) return 0;
-        if (t == long.class) return 0L;
-        if (t == float.class) return 0f;
-        if (t == double.class) return 0d;
-        if (t == short.class) return (short) 0;
-        if (t == byte.class) return (byte) 0;
-        if (t == char.class) return (char) 0;
-        return null; // void 和对象
-    }
-
     // ------------------------------------------------------------ 打开评论
 
     /** 找到当前页的评论按钮并点一下；找不到返回 false。 */
@@ -270,15 +236,5 @@ final class CommentHook {
             for (int i = 0; i < g.getChildCount(); i++) if (g.getChildAt(i).hasOnClickListeners()) return g.getChildAt(i);
         }
         return btn;
-    }
-
-    /** 当前调用栈里有点击 / 触摸 / 手势事件的帧，说明是用户操作直接引起的（只在点爱心按钮时才会走到这里）。 */
-    private static boolean fromUserInput() {
-        for (StackTraceElement e : new Throwable().getStackTrace()) {
-            String m = e.getMethodName();
-            if (m.equals("performClick") || m.equals("onClick") || m.equals("dispatchTouchEvent") || m.equals("onTouchEvent")
-                    || m.equals("onDoubleTap") || m.equals("onSingleTapUp") || m.equals("onSingleTapConfirmed")) return true;
-        }
-        return false;
     }
 }
