@@ -23,6 +23,13 @@
 ## 使用
 设置页的内容按功能折叠成一个个分组（点标题展开，展开一个其他自动收起；有总开关的分组不用展开就能开关）。前提：LSPosed 里启用模块、作用域勾选抖音、强杀抖音重开；改完点底部「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
+## 1.32.0：点「我」默认显示个人主页的「喜欢」标签
+
+- **开关**：设置页「我的主页默认『喜欢』」。配置项 `profFav`，默认关。新钩子两个：`prof.pager`（`androidx.viewpager.widget.ViewPager#setCurrentItem` 两个重载，按 `ProfileViewPager` 过滤）和 `prof.tap`（`View#performClick`，按 `BottomTab` / `DmtTabLayout$TabView` 过滤）。**全部是没混淆的类名和方法名**，没有放宽匹配。
+- **依据**（TextRec 40.9.0，`textrec-tasks-20261023-231633`）：个人主页分页控件 `com.ss.android.ugc.aweme.profile.widgets.ProfileViewPager`；点「喜欢」→ `setCurrentItem(4)`（最后一页），点「作品」→ `(0)`；点底部「我」后 0.2～0.8 秒内，抖音自己调 3 次 `setCurrentItem(0)`（都出自混淆名的协程 / Runnable，所以不挂它们）；切走再回来抖音自己调的是 `(4)`。底部「我」是 `homepage.tab.ui.bottom.BottomTab`，里面有文字「我」的 TextView。
+- **做法**：点到「我」的 BottomTab 记下时刻；3 秒内、`ProfileViewPager` 的 `setCurrentItem(0)` 且距用户点页内标签超过 1.2 秒的，参数改成 99（`ViewPager` 自己把越界页号收到最后一页 = 喜欢，不依赖标签个数），smoothScroll 改 false。没有定时器，只比较 `uptimeMillis`。
+- **局限**：没编译、没上机。「喜欢是最后一页」只有一个账号的证据；已在个人主页再点一次「我」、或 3 秒内抖音在用户没点的情况下又调 `setCurrentItem(0)`，也会被改到「喜欢」（追踪里没出现过）。没挂上时个人主页保持原样。
+
 ## 1.31.0：文字灰色底可选底色
 
 - 设置页「文字灰色底」分组里多了一行「底色」，点开是色表（24 色）+ 可输入 6 位自定义色值（如 FF8800）；「默认（近黑）」= 以前的 #101010。不透明度仍由「不透明度」管。
