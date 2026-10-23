@@ -25,19 +25,15 @@ final class LineBg {
     private static final int GRAY = 0x00101010;
 
     /**
-     * 字色的最低相对亮度 0.30（对纯黑底约 7:1）。底是半透明的黑、叠在亮一点的画面上，实际比纯黑亮，
-     * 所以不能只按 4.5:1 算（1.29.1 用 0.175，紫色 / 靛蓝的弹幕提不亮，仍然看不清）。
+     * 以后新增的、由模块自己决定颜色的文字（像随机色的弹幕）：颜色过一遍这里，太暗的（纯蓝、紫、深红等）往白色方向提亮，
+     * 直到相对亮度（gamma 2 近似）达到 minLum（0～1，设置页「字的最低亮度」的百分比 / 100）；够亮的原样返回，minLum <= 0 不提亮。
+     * 底是半透明的黑、叠在亮一点的画面上，实际比纯黑亮，所以这个值交给用户自己调。用户自己选的颜色（文案、时长、开播时间）不改。只处理 0xRRGGBB，不分配对象。
      */
-    private static final float MIN_LUM = 0.30f;
-
-    /**
-     * 以后新增的、由模块自己决定颜色的文字（像随机色的弹幕）：颜色过一遍这里，太暗的（纯蓝、紫、深红等）往白色方向提亮到 MIN_LUM 为止，
-     * 够亮的原样返回。用户自己选的颜色（文案、时长、开播时间）不改。只处理 0xRRGGBB，不分配对象。
-     */
-    static int legible(int rgb) {
+    static int legible(int rgb, float minLum) {
+        if (minLum <= 0f) return rgb;
         float r = ((rgb >> 16) & 255) / 255f, g = ((rgb >> 8) & 255) / 255f, b = (rgb & 255) / 255f;
         float t = 0f;
-        while (t < 1f && 0.2126f * sq(r + (1f - r) * t) + 0.7152f * sq(g + (1f - g) * t) + 0.0722f * sq(b + (1f - b) * t) < MIN_LUM) t += 0.05f;
+        while (t < 1f && 0.2126f * sq(r + (1f - r) * t) + 0.7152f * sq(g + (1f - g) * t) + 0.0722f * sq(b + (1f - b) * t) < minLum) t += 0.05f;
         if (t <= 0f) return rgb;
         if (t > 1f) t = 1f;
         return (Math.round((r + (1f - r) * t) * 255f) << 16) | (Math.round((g + (1f - g) * t) * 255f) << 8) | Math.round((b + (1f - b) * t) * 255f);
