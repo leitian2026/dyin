@@ -196,7 +196,7 @@ public class MainActivity extends Activity {
         sBar.body.addView(segBarSel);
         place(sBar);
 
-        bgF = new PctField(55);
+        bgF = new PctField(70);
         Section sBg = new Section("文字灰色底", false, null, () -> bgF.v == 0 ? "已关闭" : "不透明度 " + bgF.v + "%");
         sBg.body.addView(note("给视频文案、视频时长、发布日期地点、弹幕、直播间开播时间的每一行字加一条黑色半透明底，底比字大一个字号（四周各多 1 sp）。0% = 不加。文案的底在文案控件边界处可能被裁掉一点。"));
         sBg.body.addView(settingRow("不透明度", bgF.build()));
