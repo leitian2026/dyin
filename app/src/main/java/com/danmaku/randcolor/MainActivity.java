@@ -188,8 +188,8 @@ public class MainActivity extends Activity {
         place(sPub);
 
         blankF = new BlankField();
-        Section sBlank = new Section("文案下方空白行", false, null, () -> blankF.v < 0 ? "默认（" + DanmakuConfig.BLANK_DEFAULT_SP + " sp 高）" : blankF.v == 0 ? "不留空白" : "高度 " + blankF.v * 2 + " px");
-        sBlank.body.addView(note("在视频文案下面（原来发布地那一行的位置）加一块空白，给你留出地方。默认是 37 sp 字那么高；每按一次 + 多 2 像素，− 少 2 像素；0 = 不留；点中间的数字回到默认。划到下一个视频生效。"));
+        Section sBlank = new Section("文案下方空白行", false, null, () -> blankF.v < 0 ? "默认（" + DanmakuConfig.BLANK_DEFAULT_SP + " sp 高）" : blankF.v == 0 ? "不上顶" : "高度 " + blankF.v * 2 + " px");
+        sBlank.body.addView(note("把作者声明和文案这一整块往上顶一段，下面留出空位给发布地和时长。默认是 37 sp 字那么高；每按一次 + 多 2 像素，− 少 2 像素；0 = 不顶；点中间的数字回到默认。回到抖音后生效。"));
         sBlank.body.addView(settingRow("高度", blankF.build()));
         place(sBlank);
 
