@@ -42,6 +42,7 @@ final class TabHook {
     /** 启动时和每次回到前台都会被调用；HookGuard 保证已有结论后立刻返回。 */
     static void tryHook(ClassLoader cl) {
         if (cl == null || HookGuard.settled(HookGuard.TAB)) return;
+        if (DanmakuHook.cfg.hiddenTabs.length == 0) return; // 没勾选任何标签：不挂全局的 View.setContentDescription（没有结论，勾选后回到前台再挂）
         Class<?> c = HookGuard.find(HookGuard.TAB, ITEM, cl); // 类没找到：记一次等待，下次回到前台再试
         if (c == null) return;
         try {
