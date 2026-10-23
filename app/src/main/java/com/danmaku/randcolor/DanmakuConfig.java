@@ -48,11 +48,9 @@ public final class DanmakuConfig {
     public static final int BLANK_DEFAULT_SP = 37;
     /** 文案下面的空白行高度：每 1 = 2 像素（-1 = 默认，高度等于 BLANK_DEFAULT_SP 的字高；0 = 不放；最大 200）。 */
     public int blankH = -1;
-    /** 上顶留出的空位顶上那条色条的颜色（0 = 默认半透明白）；高度固定 16 像素，blankH 为 0 时不画。 */
-    public int barColor = 0;
-    /** 色条开关；选哪个（1 = 发布地，2 = 时长，3 = 两个都选）：选中的那几项里有开着的，色条才出现；不透明度 0～100 %，0 = 全透明（不画）。 */
+    /** 文案下方固定位置的开关；选哪个（1 = 发布地，2 = 时长，3 = 两个都选）：选中的文字放在文案下方（上顶留出的空位的顶上），不再用自己的自由位置；没有色条。 */
     public boolean barOn = true;
-    public int barSel = 3, barAlpha = 40;
+    public int barSel = 1;
     /** 发布日期地点、视频时长两个浮层在页面里的位置（左 / 上，dp，0 ～ 4000）；-1 = 默认。在抖音里用位置浮窗拖，见 VidPosPanel。 */
     public int pubX = -1, pubY = -1, timeX = -1, timeY = -1;
     /** 位置调节模式（发布地 / 时长）：设置页点「去抖音里调整」时置 true，抖音里浮窗点完成 / 取消时改回 false。设置页自己存的配置里永远是 false。 */
@@ -91,10 +89,8 @@ public final class DanmakuConfig {
             p.setProperty("liveAdjust", String.valueOf(liveAdjust));
             p.setProperty("lineBg", String.valueOf(lineBg));
             p.setProperty("blankH", String.valueOf(blankH));
-            p.setProperty("barColor", String.valueOf(barColor));
             p.setProperty("barOn", String.valueOf(barOn));
             p.setProperty("barSel", String.valueOf(barSel));
-            p.setProperty("barAlpha", String.valueOf(barAlpha));
             p.setProperty("pubX", String.valueOf(pubX));
             p.setProperty("pubY", String.valueOf(pubY));
             p.setProperty("timeX", String.valueOf(timeX));
@@ -197,10 +193,8 @@ public final class DanmakuConfig {
         c.capColor = parseColor(p.getProperty("capColor", "0"));
         c.timeColor = parseColor(p.getProperty("timeColor", "0"));
         c.pubColor = parseColor(p.getProperty("pubColor", "0"));
-        c.barColor = parseColor(p.getProperty("barColor", "0"));
         c.barOn = Boolean.parseBoolean(p.getProperty("barOn", "true").trim());
-        c.barSel = Math.max(1, Math.min(3, parseIntOr(p.getProperty("barSel", "3"), 3)));
-        c.barAlpha = parsePct(p.getProperty("barAlpha", "40"), 40);
+        c.barSel = Math.max(1, Math.min(3, parseIntOr(p.getProperty("barSel", "1"), 1)));
         String fmt = p.getProperty("pubFormat", PubFormat.DEFAULT);
         c.pubFormat = fmt == null || fmt.trim().isEmpty() ? PubFormat.DEFAULT : fmt;
         c.liveTime = Boolean.parseBoolean(p.getProperty("liveTime", "false").trim());
