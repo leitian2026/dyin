@@ -189,7 +189,7 @@ public class MainActivity extends Activity {
 
         blankF = new BlankField();
         Section sBlank = new Section("文案下方空白行", false, null, () -> blankF.v < 0 ? "默认（" + DanmakuConfig.BLANK_DEFAULT_SP + " sp 高）" : blankF.v == 0 ? "不上顶" : "高度 " + blankF.v * 2 + " px");
-        sBlank.body.addView(note("把作者声明和文案这一整块往上顶一段，下面留出空位给发布地和时长。默认是 37 sp 字那么高；每按一次 + 多 2 像素，− 少 2 像素；0 = 不顶；点中间的数字回到默认。回到抖音后生效。"));
+        sBlank.body.addView(note("在文案和作者声明中间留一段空位：文案（和它上面的作者名）往上顶，作者声明不动，空位给发布地和时长。默认是 37 sp 字那么高；每按一次 + 多 2 像素，− 少 2 像素；0 = 不顶；点中间的数字回到默认。回到抖音后生效。"));
         sBlank.body.addView(settingRow("高度", blankF.build()));
         place(sBlank);
 
