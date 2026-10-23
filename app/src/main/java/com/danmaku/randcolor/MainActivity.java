@@ -51,14 +51,13 @@ public class MainActivity extends Activity {
     /** 首页顶部标签行里的 13 个标签（来自 TextRec 追踪，40.7.0）；勾选 = 隐藏。 */
     private static final String[] TAB_LABELS = {"推荐", "关注", "热点", "同城", "商城", "经验", "游戏", "少儿", "精选", "团购", "免费看剧", "短剧", "直播"};
     private final CheckBox[] cbTabs = new CheckBox[TAB_LABELS.length];
-    private Switch swEnabled, swLikeBtn, swDtap, swTime, swPub;
+    private Switch swEnabled, swDtap, swTime, swPub;
     private LinearLayout segMode, statusCard;
     /** 时长 / 发布信息的字号（sp）、三处颜色（0 = 默认 / 不改）、发布信息的积木列表。 */
     private SizeField timeSizeF, pubSizeF;
     private ColorField timeColorF, pubColorF, capColorF;
     private final java.util.ArrayList<Block> blocks = new java.util.ArrayList<>();
     private LinearLayout blockList;
-    private Switch swCapOutline;
     /** 直播间开播时间：开关、取哪个时间、模板、字号、颜色。位置（百分比）不在设置页调，在抖音里用浮窗拖，这里只存 / 显示。 */
     private Switch swLive;
     private LinearLayout segLiveSrc;
@@ -115,14 +114,8 @@ public class MainActivity extends Activity {
         sDanmaku.body.addView(segMode);
         place(sDanmaku);
 
-        swLikeBtn = new Switch(this);
         swDtap = new Switch(this);
-        Section sLike = new Section("点赞改为打开评论", false, null, () -> {
-            boolean a = swLikeBtn.isChecked(), b = swDtap.isChecked();
-            return a && b ? "爱心按钮 · 双击视频" : a ? "爱心按钮" : b ? "双击视频" : "未开启";
-        });
-        sLike.body.addView(switchRow("点右侧爱心按钮时打开评论", "不再点赞（也不会取消赞）；找不到评论按钮时点赞照常", swLikeBtn));
-        sLike.body.addView(divider());
+        Section sLike = new Section("双击视频改为打开评论", false, null, () -> swDtap.isChecked() ? "已开启" : "未开启");
         sLike.body.addView(switchRow("双击视频时打开评论", "双击不再点赞，也不出红心", swDtap));
         place(sLike);
 
@@ -205,16 +198,13 @@ public class MainActivity extends Activity {
 
         bgF = new PctField(40);
         Section sBg = new Section("文字灰色底", false, null, () -> bgF.v == 0 ? "已关闭" : "不透明度 " + bgF.v + "%");
-        sBg.body.addView(note("给视频文案、视频时长、发布日期地点的每一行字加一条灰色底，底比字大一个字号（四周各多 1 sp）。0% = 不加。文案的底在文案控件边界处可能被裁掉一点。"));
+        sBg.body.addView(note("给视频文案、视频时长、发布日期地点、弹幕、直播间开播时间的每一行字加一条灰色底，底比字大一个字号（四周各多 1 sp）。0% = 不加。文案的底在文案控件边界处可能被裁掉一点。"));
         sBg.body.addView(settingRow("不透明度", bgF.build()));
         place(sBg);
 
-        swCapOutline = new Switch(this);
         capColorF = new ColorField("不改（抖音原来的颜色）", "选择文案颜色");
         Section sCap = new Section("视频文案样式", false, null,
-                () -> "描边 " + (swCapOutline.isChecked() ? "开" : "关") + " · 颜色 " + (capColorF.color == 0 ? "不改" : "自定义"));
-        sCap.body.addView(switchRow("给视频文案加黑色描边", "亮背景上也看得清；关掉后要重启抖音才恢复", swCapOutline));
-        sCap.body.addView(rowLine());
+                () -> "颜色 " + (capColorF.color == 0 ? "不改" : "自定义"));
         sCap.body.addView(capColorF.row("文案颜色"));
         TextView capNote = note("话题、@ 这类抖音自己上色的文字不变；选过颜色再改回「不改」，要重启抖音才恢复。");
         capNote.setPadding(0, dp(6), 0, 0);
@@ -631,7 +621,6 @@ public class MainActivity extends Activity {
         etPkg.setText(sp.getString("pkg", DEFAULT_PKG));
         DanmakuConfig c = DanmakuConfig.fromText(sp.getString("cfg", ""));
         swEnabled.setChecked(c.enabled);
-        swLikeBtn.setChecked(c.likeBtnToComment);
         swDtap.setChecked(c.dtapToComment);
         swTime.setChecked(c.timeAlways);
         etIdle.setText(String.valueOf(c.idleExitMin));
@@ -647,7 +636,6 @@ public class MainActivity extends Activity {
         renderBlocks();
         timeColorF.set(c.timeColor);
         pubColorF.set(c.pubColor);
-        swCapOutline.setChecked(c.capOutline);
         capColorF.set(c.capColor);
         setSeg(segMode, c.mode == 1 ? 1 : 0);
         swLive.setChecked(c.liveTime);
@@ -673,7 +661,6 @@ public class MainActivity extends Activity {
         DanmakuConfig c = new DanmakuConfig();
         c.enabled = swEnabled.isChecked();
         c.mode = segIndex(segMode) == 1 ? 1 : 0;
-        c.likeBtnToComment = swLikeBtn.isChecked();
         c.dtapToComment = swDtap.isChecked();
         c.timeAlways = swTime.isChecked();
         c.pubAlways = swPub.isChecked();
@@ -682,7 +669,6 @@ public class MainActivity extends Activity {
         c.pubFormat = toTemplate();
         c.timeColor = timeColorF.color;
         c.pubColor = pubColorF.color;
-        c.capOutline = swCapOutline.isChecked();
         c.capColor = capColorF.color;
         c.liveTime = swLive.isChecked();
         c.liveSrc = segIndex(segLiveSrc) == 1 ? 1 : 0;
@@ -767,16 +753,15 @@ public class MainActivity extends Activity {
 
     private static final String[][] HOOK_NAMES = {
             {"paint", "弹幕随机色"},
-            {"comment.digg", "爱心按钮改评论"},
             {"dtap.seen", "双击改评论：识别双击（系统方法）"},
             {"dtap.cut", "双击改评论：拦在点赞之前"},
             {"dtap.click", "双击改评论：不让单击暂停视频"},
             {"time.progress", "视频时长：播放进度"},
             {"tab.hide", "首页顶部标签隐藏"},
             {"pub.bind", "发布日期地点 / 视频时长：翻页绑定（视频数据 + 页面容器）"},
-            {"pub.text", "视频文案：描边 / 改色（设置文字时）"},
+            {"pub.text", "视频文案：改色 / 灰色底（设置文字时）"},
             {"pub.intro", "文案上顶：文案容器出现时"},
-            {"pub.anchor", "视频文案：描边 / 改色（认文案控件）"},
+            {"pub.anchor", "视频文案：改色 / 灰色底（认文案控件）"},
             {"cap.draw", "视频文案：绘制时改色"},
             {"live.page", "直播间开播时间：直播间页面"},
             {"live.room", "直播间开播时间：房间数据"},
