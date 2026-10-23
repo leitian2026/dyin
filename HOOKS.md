@@ -47,7 +47,7 @@ LSPosed 日志里会出现两种关键行（只在状态变成「放弃」「不
 | `TimeHook.java` | 时长进度：1 个钩子 `time.progress`（`OnUIPlayListenerDelegate#onPlayProgressChange`，单方法按名字匹配的示例），把 id / 位置 / 总时长转给 `PubHook.onProgress` |
 | `CommentHook.java` | 点赞改评论：4 个钩子——2 个混淆名（不放宽匹配的示例）+ 2 个没混淆的双击路径（`dtap.seen` 系统方法、`dtap.cut` 在拦截判断里改结果，两个都挂上才生效） |
 | `MainActivity.java` | 设置页（折叠分组 `Section`）；`HOOK_NAMES` 是「钩子 id → 中文名」，`describeHooks` 解析 `hooks.properties` |
-| `PubHook.java` | 发布日期地点、视频时长、文案样式。核心钩子 `pub.bind`（`VideoViewHolder#bind(Aweme, …)` after：按运行时类型取页面根 `VideoViewHolderRootView`，发布信息 / 时长两个浮层盖在页面根上（位置全屏可调），aid → 页面登记在 `PAGES` 里给进度回调用；4 个类按名字找，缺哪个都是「类没找到」）；文案样式另外 3 个：`pub.anchor`（只找两个文案类）、`pub.text`（`DmtTextView#setText` 通用控件，回调里先比较 `this` 的类；文案样式在这里套，**文案上顶也在这里做**：文案每次设文字 / 布局完成，沿父级找 `AwemeIntroInfoLayout`，整个容器 `translationY` 上移，下面留出空位给发布地和时长）、`cap.draw`（`MentionTextView#onDraw`） |
+| `PubHook.java` | 发布日期地点、视频时长、文案样式。核心钩子 `pub.bind`（`VideoViewHolder#bind(Aweme, …)` after：按运行时类型取页面根 `VideoViewHolderRootView`，发布信息 / 时长两个浮层盖在页面根上（位置全屏可调），aid → 页面登记在 `PAGES` 里给进度回调用；4 个类按名字找，缺哪个都是「类没找到」）；文案样式另外 3 个：`pub.anchor`（只找两个文案类）、`pub.text`（`DmtTextView#setText` 通用控件，回调里先比较 `this` 的类；文案样式在这里套，**空白行也在这里做**：文案每次设文字 / 布局完成，沿父级找 `AwemeIntroInfoLayout`，把文案所在的直接子控件和它上面的直接子控件 `translationY` 上移（作者声明等不动），文案和声明之间留出空位给发布地和时长）、`cap.draw`（`MentionTextView#onDraw`） |
 | `TabHook.java` | 首页顶部标签隐藏：类名按没混淆的 `HomeTopTabItemViewNew` 找（走 HookGuard），挂框架方法 `View.setContentDescription` 并按这个类过滤 |
 | `IdleExit.java` | 无操作自动退出：钩 `Activity.onUserInteraction`（框架方法，不走 HookGuard），记最后操作时刻；一条延时消息到点检查，够了结束进程 |
 | `LiveHook.java` | 直播间开播时间：钩 `LivePlayFragmentV2#onViewCreated`（记页面）和 `Room#getCreateTime`（触发刷新），文字叠在页面根控件的 ViewOverlay 上，位置按百分比放；格式在 `LiveFormat.java` |
