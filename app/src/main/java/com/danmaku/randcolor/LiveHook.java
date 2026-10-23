@@ -135,6 +135,7 @@ final class LiveHook {
 
     private static void hookRoom(ClassLoader cl) {
         if (HookGuard.settled(HookGuard.LIVE_ROOM)) return;
+        if (!DanmakuHook.cfg.liveTime && !DanmakuHook.cfg.liveAdjust) return; // 开播时间没开：不挂 Room.getCreateTime（没有结论，打开后回到前台再挂）
         Class<?> rc = HookGuard.find(HookGuard.LIVE_ROOM, ROOM, cl);
         if (rc == null) return;
         Field fc = null, fs = null;
