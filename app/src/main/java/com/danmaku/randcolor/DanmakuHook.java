@@ -45,6 +45,10 @@ final class DanmakuHook {
      */
     private static final long[] CACHE = new long[256];
     private static volatile Class<?> strokeCls, fillCls;
+    /** 每个缓存槽里最近一次交给 Compose 的装箱结果（Long）和它对应的 ARGB：参数一样就直接复用，不再每次绘制 new 一个 Long。 */
+    private static final Object[] BOX = new Object[256];
+    private static final int[] BOXA = new int[256];
+    private static int lastSlot;
 
     static void init(XC_LoadPackage.LoadPackageParam lp) {
         cfgFile = new File(new File(lp.appInfo.dataDir, "files"), "danmaku_color.properties");
@@ -241,7 +245,14 @@ final class DanmakuHook {
                 int rgb = colorOf(System.identityHashCode(p.thisObject), p.thisObject, c.mode);
                 int alpha = (int) ((v >>> 56) & 0xFF);           // 保留原透明度
                 int argb = (alpha << 24) | rgb;
-                a[colorIdx] = (((long) argb) & 0xFFFFFFFFL) << 32; // Compose 的 sRGB Color：ARGB 放在高 32 位
+                int slot = lastSlot;
+                Object box = BOX[slot];
+                if (box == null || BOXA[slot] != argb) { // Compose 的 sRGB Color：ARGB 放在高 32 位
+                    box = Long.valueOf((((long) argb) & 0xFFFFFFFFL) << 32);
+                    BOX[slot] = box;
+                    BOXA[slot] = argb;
+                }
+                a[colorIdx] = box;
             } catch (Throwable ignored) {
             }
         }
@@ -251,6 +262,7 @@ final class DanmakuHook {
      *  以前按对象身份定色，抖音重新测量会换新对象，颜色就跟着变，弹幕会闪几下。 */
     private static int colorOf(int key, Object mp, int mode) {
         int slot = (key ^ (key >>> 8)) & 255;
+        lastSlot = slot;
         long e = CACHE[slot];
         int tag = 0x01000000 | (mode << 25);
         if ((int) (e >>> 32) == key && ((int) e & 0xFF000000) == tag) return (int) e & 0xFFFFFF;
