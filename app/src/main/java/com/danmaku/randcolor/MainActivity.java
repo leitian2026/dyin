@@ -14,6 +14,10 @@ import android.os.Build;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
+import android.util.TypedValue;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.Gravity;
@@ -184,12 +188,13 @@ public class MainActivity extends Activity {
         place(sPub);
 
         blankF = new BlankField();
-        barColorF = new ColorField("默认（半透明白）", "选择色条颜色");
-        Section sBlank = new Section("文案下方色条", false, null, () -> blankF.v == 0 ? "已关闭" : "高度 " + blankF.v * 2 + " px");
-        sBlank.body.addView(note("在视频文案下面（原来发布地那一行的位置）加一条色条，默认高 16 像素。每按一次 + 多 2 像素，− 少 2 像素；0 = 不放。划到下一个视频生效。"));
+        Section sBlank = new Section("文案下方空白行", false, null, () -> blankF.v < 0 ? "默认（" + DanmakuConfig.BLANK_DEFAULT_SP + " sp 高）" : blankF.v == 0 ? "不上顶" : "高度 " + blankF.v * 2 + " px");
+        sBlank.body.addView(note("把作者声明和文案这一整块往上顶一段，下面留出空位给发布地和时长。默认是 37 sp 字那么高；每按一次 + 多 2 像素，− 少 2 像素；0 = 不顶；点中间的数字回到默认。回到抖音后生效。"));
         sBlank.body.addView(settingRow("高度", blankF.build()));
         sBlank.body.addView(rowLine());
-        sBlank.body.addView(barColorF.row("颜色"));
+        barColorF = new ColorField("默认（半透明白）", "选择色条颜色");
+        sBlank.body.addView(note("空位的顶上（文案下面）有一条 16 像素高的色条，只在「不顶」以外的高度时出现。"));
+        sBlank.body.addView(barColorF.row("色条颜色"));
         place(sBlank);
 
         bgF = new PctField(40);
@@ -762,6 +767,7 @@ public class MainActivity extends Activity {
             {"tab.hide", "首页顶部标签隐藏"},
             {"pub.bind", "发布日期地点 / 视频时长：翻页绑定（视频数据 + 页面容器）"},
             {"pub.text", "视频文案：描边 / 改色（设置文字时）"},
+            {"pub.intro", "文案上顶：文案容器出现时"},
             {"pub.anchor", "视频文案：描边 / 改色（认文案控件）"},
             {"cap.draw", "视频文案：绘制时改色"},
             {"live.page", "直播间开播时间：直播间页面"},
@@ -783,17 +789,22 @@ public class MainActivity extends Activity {
                 if (isFinishing() || isDestroyed()) return;
                 setBusy(btnHooks, false, "检查钩子状态");
                 if (text == null) {
-                    showStatus("没读到钩子状态：抖音还没运行过 / 模块没在 LSPosed 里勾选它 / 没 root。先打开抖音用一会儿，再来检查。", 2);
+                    showStatus("没读到钩子状态：抖音还没运行过 / 模块没在 LSPosed 里勾选它 / 没 root。先打开抖音用一会儿，再来检查。", 2, HOOK_STATUS_SP);
                     return;
                 }
                 boolean[] bad = new boolean[1];
-                String msg = describeHooks(text, bad);
-                showStatus(msg == null ? "钩子状态文件读不懂" : msg, msg == null || bad[0] ? 2 : 1);
+                CharSequence msg = describeHooks(text, bad, dark ? 0xFFFF9C94 : 0xFFB3261E);
+                // 有不生效的：底色用普通的，只有那几行是红字；全都正常：绿色
+                showStatus(msg == null ? "钩子状态文件读不懂" : msg, msg == null ? 2 : (bad[0] ? 0 : 1), HOOK_STATUS_SP);
             });
         }).start();
     }
 
-    private static String describeHooks(String text, boolean[] bad) {
+    /** 钩子状态的字号（sp）：比普通状态（13）大两号。 */
+    private static final int HOOK_STATUS_SP = 15;
+
+    /** 每个钩子一行；不生效的（未适配 / 类一直没找到）那一行用 red 色。 */
+    private static CharSequence describeHooks(String text, boolean[] bad, int red) {
         Properties p = new Properties();
         try {
             p.load(new ByteArrayInputStream(text.getBytes(StandardCharsets.ISO_8859_1)));
@@ -801,24 +812,31 @@ public class MainActivity extends Activity {
             return null;
         }
         String ver = p.getProperty("ver");
-        StringBuilder b = new StringBuilder("抖音 ").append(ver != null ? ver : "（版本未知）").append('\n');
+        SpannableStringBuilder b = new SpannableStringBuilder("抖音 ");
+        b.append(ver != null ? ver : "（版本未知）").append('\n');
         for (String[] h : HOOK_NAMES) {
             String st = p.getProperty(h[0]), note = p.getProperty(h[0] + ".note");
             boolean hasNote = note != null && !note.isEmpty();
+            int start = b.length();
+            boolean fail = false;
             if ("ok".equals(st)) {
                 b.append("✓ ").append(h[1]).append(hasNote ? "（" + note + "）" : "");
             } else if ("gaveup".equals(st)) {
-                bad[0] = true;
+                fail = true;
                 b.append("✗ ").append(h[1]).append("：未适配").append(hasNote ? " — " + note : "");
             } else if ("missing".equals(st)) {
-                bad[0] = true;
+                fail = true;
                 b.append("✗ ").append(h[1]).append("：相关的类一直没找到");
             } else {
                 b.append("… ").append(h[1]).append("：还没挂上（抖音还没走到相关界面）");
             }
+            if (fail) {
+                bad[0] = true;
+                b.setSpan(new ForegroundColorSpan(red), start, b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
             b.append('\n');
         }
-        return b.toString().trim();
+        return b.delete(b.length() - 1, b.length());
     }
 
     // ------------------------------------------------------------ 字号 / 颜色（时长、发布信息、文案共用）
@@ -888,7 +906,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 空白行高度：「−  N  +」，每次 ±1（= ±2 像素），0～200。 */
+    /** 空白行高度：「−  N  +」，每次 ±1（= ±2 像素），0～200；-1 = 默认（37 sp 的字高），点中间的数字回到默认。 */
     private final class BlankField {
         int v;
         TextView label;
@@ -899,28 +917,34 @@ public class MainActivity extends Activity {
             r.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
             TextView minus = pillButton("−", false);
             minus.setTextSize(20);
-            minus.setOnClickListener(x -> set(v - 1));
+            minus.setOnClickListener(x -> set(v < 0 ? defSteps() - 1 : Math.max(0, v - 1)));
             r.addView(minus, new LinearLayout.LayoutParams(dp(44), dp(40)));
             label = tv("", 15, cText, true);
             label.setGravity(Gravity.CENTER);
             label.setMinWidth(dp(88));
+            label.setOnClickListener(x -> set(-1));
             r.addView(label, new LinearLayout.LayoutParams(-2, -2));
             TextView plus = pillButton("+", false);
             plus.setTextSize(20);
-            plus.setOnClickListener(x -> set(v + 1));
+            plus.setOnClickListener(x -> set((v < 0 ? defSteps() : v) + 1));
             r.addView(plus, new LinearLayout.LayoutParams(dp(44), dp(40)));
             show();
             return r;
         }
 
+        /** 默认高度（37 sp 的字高）对应的档位（每档 2 像素），从默认开始按 + / − 时以它为起点。 */
+        int defSteps() {
+            return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, DanmakuConfig.BLANK_DEFAULT_SP, getResources().getDisplayMetrics()) / 2f);
+        }
+
         void set(int n) {
-            v = Math.max(0, Math.min(200, n));
+            v = n < 0 ? -1 : Math.min(200, n);
             show();
             refreshSummaries();
         }
 
         void show() {
-            if (label != null) label.setText(v + " · " + v * 2 + " px");
+            if (label != null) label.setText(v < 0 ? "默认 · " + DanmakuConfig.BLANK_DEFAULT_SP + " sp" : v + " · " + v * 2 + " px");
         }
     }
 
@@ -1293,7 +1317,11 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------ 状态卡片 / 忙碌态
 
     /** tone: 0 普通  1 成功  2 失败 */
-    private void showStatus(String msg, int tone) {
+    private void showStatus(CharSequence msg, int tone) {
+        showStatus(msg, tone, 13);
+    }
+
+    private void showStatus(CharSequence msg, int tone, int sp) {
         int bg, fg;
         if (tone == 1) {
             bg = dark ? 0xFF16301F : 0xFFE8F6EC;
@@ -1307,6 +1335,7 @@ public class MainActivity extends Activity {
         }
         statusCard.setBackground(round(bg, 0, 16));
         tvStatus.setTextColor(fg);
+        tvStatus.setTextSize(sp);
         tvStatus.setText(msg);
         statusCard.setVisibility(View.VISIBLE);
         scroll.post(() -> scroll.smoothScrollTo(0, Math.max(0, statusCard.getTop() - dp(12))));
