@@ -1,9 +1,9 @@
-# dyin（DanmakuColor）— 抖音弹幕随机色 + 点赞改打开评论 + 视频时长常显 + 发布日期地点常显 + 直播间开播时间（LSPosed 模块）
+# dyin（DanmakuColor）— 抖音弹幕随机色 + 双击改打开评论 + 视频时长常显 + 发布日期地点常显 + 直播间开播时间（LSPosed 模块）
 
 ## 功能
 1. **弹幕随机色**：每条弹幕随机颜色，保留黑色描边。
-2. **拦截点赞**：右侧爱心按钮 / 双击视频不再点赞，也不出双击红心。
-3. **打开评论**：上面两种操作改为打开当前视频的评论。双击这一路只走名字没混淆的 `onDoubleTap` + `MonitorScrollFrameLayout#onInterceptTouchEvent`（+ `handleSingleClick`）；1.26.4 起去掉了混淆名的 `LLLIILIL` 兜底。
+2. **拦截点赞**：双击视频不再点赞，也不出双击红心（1.29.0 起没有「右侧爱心按钮改评论」）。
+3. **打开评论**：双击视频改为打开当前视频的评论。双击这一路只走名字没混淆的 `onDoubleTap` + `MonitorScrollFrameLayout#onInterceptTouchEvent`（+ `handleSingleClick`）；1.26.4 起去掉了混淆名的 `LLLIILIL` 兜底。
 4. **视频时长常显**（1.15）：自己放一行 `00:12 / 03:45`，随播放走动。1.22.0 起它是视频文案下面的一行（有发布日期地点时在它的正下方），可以调字号和颜色；1.27.0 起每个视频页自己带一个；1.28.0 起它是盖在页面上的浮层，位置全屏任意可调。
 
 5. **无操作自动退出**（1.17.8）：连续 N 分钟没有操作抖音（触摸、按键、回到前台都算操作），就结束抖音进程；后台也计时。设置页里填分钟数，0 = 关闭。
@@ -22,6 +22,14 @@
 
 ## 使用
 设置页的内容按功能折叠成一个个分组（点标题展开，展开一个其他自动收起；有总开关的分组不用展开就能开关）。前提：LSPosed 里启用模块、作用域勾选抖音、强杀抖音重开；改完点底部「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
+
+## 1.29.0：删掉「爱心按钮改评论」和「文案黑色描边」，灰色底加上弹幕和开播时间
+
+- **删掉**：①「点右侧爱心按钮时打开评论」：`CommentHook` 里的 `DiggHook`、`DIGG` 常量、`fromUserInput`、`defaultOf`，`HookGuard` 的 `DIGG` 编号（后面的编号顺延一位，`IDS` 同步，hooks.properties 按名字存取，不受影响），配置项 `likeBtnToComment`，设置页的开关和「钩子状态」里的「爱心按钮改评论」；设置页分组改名「双击视频改为打开评论」。②「给视频文案加黑色描边」：配置项 `capOutline`、设置页开关、`PubHook.styleCaption` 里的阴影层。文案颜色和灰色底不受影响，`pub.text` / `pub.anchor` / `cap.draw` 照旧。旧配置文件里的这两个键读取时直接忽略。发布信息 / 时长 / 开播时间自己的黑边阴影没动。
+- **灰色底加上弹幕和直播间开播时间**（共用「文字灰色底」的不透明度 `lineBg`，没有单独的开关；0% = 都不画）：
+  - 开播时间：`LiveHook` 里的文字控件改用 `LineBg.Row`（和发布信息 / 时长同一个），四边多了 3sp 的内边距，所以文字的位置比以前偏 3sp 左右。
+  - 弹幕：在 `DanmakuHook.PaintHook` 里，弹幕的 Stroke 那次 `paint` 之前画底（不依赖「弹幕随机色」是否开着）；文字框用 `MultiParagraph` 的 `getLineCount / getLineLeft / getLineRight / getLineTop / getLineBottom` 读，按对象身份缓存，热路径里不反射不分配；`LineBg` 新增 `drawBox`。没有新钩子，`RULES_REV` 不变。
+- **没证据的部分（没上机、没编译）**：①那 5 个 `MultiParagraph` 方法名是按 Compose 公开接口写的，没有用 TextRec 在 40.7.0 上确认没被混淆；②paint 的 Canvas 参数里「类型是 `android.graphics.Canvas` 的字段」是按类型找的，也没确认。两处任何一个对不上，弹幕就安静地没有灰色底，其他功能不受影响。需要 TextRec 抓一次弹幕绘制（`MultiParagraph` 的方法列表、paint 的第一个参数的类和字段）来确认。③Stroke → Fill 这个判断和随机色共用，别的带描边的 Compose 文字也会被画上底。④没有编译：这台环境里没有 JDK 和 android.jar，只通读检查了改动。
 
 ## 1.28.10：文案下方位置 / 上顶不再只靠 pub.intro（图文帖不对）
 
