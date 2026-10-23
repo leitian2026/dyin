@@ -122,7 +122,7 @@ public class MainActivity extends Activity {
 
         swProfFav = new Switch(this);
         Section sProf = new Section("我的主页默认「喜欢」", false, null, () -> swProfFav.isChecked() ? "已开启" : "未开启");
-        sProf.body.addView(switchRow("点「我」默认显示喜欢", "进个人主页时直接停在「喜欢」标签（最后一个标签）；自己点其他标签不受影响", swProfFav));
+        sProf.body.addView(switchRow("点「我」默认显示喜欢", "每次进个人主页都停在「喜欢」标签（最后一个标签）；你自己点其他标签不受影响", swProfFav));
         place(sProf);
 
         // ================= 视频页
@@ -786,7 +786,7 @@ public class MainActivity extends Activity {
             {"live.page", "直播间开播时间：直播间页面"},
             {"live.room", "直播间开播时间：房间数据"},
             {"prof.pager", "我的主页默认喜欢：个人主页翻页（ViewPager#setCurrentItem）"},
-            {"prof.tap", "我的主页默认喜欢：认底部「我」和页内标签的点击（View#performClick）"},
+            {"prof.tap", "我的主页默认喜欢：认用户点页内标签（TabView#performClick）"},
     };
 
     /** 用 root 读抖音数据目录里的 hooks.properties（抖音进程自己写的），列出每个钩子的状态。 */
