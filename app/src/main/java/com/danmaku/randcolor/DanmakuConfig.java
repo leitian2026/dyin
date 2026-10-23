@@ -44,10 +44,10 @@ public final class DanmakuConfig {
     public boolean liveAdjust = false;
     /** 视频文案 / 视频时长 / 发布日期地点每一行字后面的灰色底的不透明度（0～100，%）；0 = 不画。见 LineBg。 */
     public int lineBg = 40;
-    /** 空白行默认高度 = 这么多 sp 的字高（blankH 为 -1 时用）。 */
-    public static final int BLANK_DEFAULT_SP = 37;
-    /** 文案下面的空白行高度：每 1 = 2 像素（-1 = 默认，高度等于 BLANK_DEFAULT_SP 的字高；0 = 不放；最大 200）。 */
-    public int blankH = -1;
+    /** 文案下面的色条高度：每 1 = 2 像素（默认 8 = 16 像素，0 = 不放，最大 200）。 */
+    public int blankH = 8;
+    /** 色条颜色（0 = 默认半透明白）。 */
+    public int barColor = 0;
     /** 发布日期地点、视频时长两个浮层在页面里的位置（左 / 上，dp，0 ～ 4000）；-1 = 默认。在抖音里用位置浮窗拖，见 VidPosPanel。 */
     public int pubX = -1, pubY = -1, timeX = -1, timeY = -1;
     /** 位置调节模式（发布地 / 时长）：设置页点「去抖音里调整」时置 true，抖音里浮窗点完成 / 取消时改回 false。设置页自己存的配置里永远是 false。 */
@@ -86,6 +86,7 @@ public final class DanmakuConfig {
             p.setProperty("liveAdjust", String.valueOf(liveAdjust));
             p.setProperty("lineBg", String.valueOf(lineBg));
             p.setProperty("blankH", String.valueOf(blankH));
+            p.setProperty("barColor", String.valueOf(barColor));
             p.setProperty("pubX", String.valueOf(pubX));
             p.setProperty("pubY", String.valueOf(pubY));
             p.setProperty("timeX", String.valueOf(timeX));
@@ -197,7 +198,8 @@ public final class DanmakuConfig {
         c.liveX = parsePct(p.getProperty("liveX", "3"), 3);
         c.liveY = parsePct(p.getProperty("liveY", "10"), 10);
         c.lineBg = parsePct(p.getProperty("lineBg", "40"), 40);
-        c.blankH = Math.max(-1, Math.min(200, parseIntOr(p.getProperty("blankH", "-1"), -1)));
+        c.blankH = Math.max(0, Math.min(200, parseIntOr(p.getProperty("blankH", "8"), 8)));
+        c.barColor = parseColor(p.getProperty("barColor", "0"));
         c.pubX = parsePos(p.getProperty("pubX", "-1"));
         c.pubY = parsePos(p.getProperty("pubY", "-1"));
         c.timeX = parsePos(p.getProperty("timeX", "-1"));
