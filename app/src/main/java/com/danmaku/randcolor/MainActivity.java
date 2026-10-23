@@ -51,7 +51,7 @@ public class MainActivity extends Activity {
     /** 首页顶部标签行里的 13 个标签（来自 TextRec 追踪，40.7.0）；勾选 = 隐藏。 */
     private static final String[] TAB_LABELS = {"推荐", "关注", "热点", "同城", "商城", "经验", "游戏", "少儿", "精选", "团购", "免费看剧", "短剧", "直播"};
     private final CheckBox[] cbTabs = new CheckBox[TAB_LABELS.length];
-    private Switch swEnabled, swDtap, swTime, swPub;
+    private Switch swEnabled, swDtap, swTime, swPub, swProfFav;
     private LinearLayout segMode, statusCard;
     /** 时长 / 发布信息的字号（sp）、三处颜色（0 = 默认 / 不改）、发布信息的积木列表。 */
     private SizeField timeSizeF, pubSizeF;
@@ -119,6 +119,11 @@ public class MainActivity extends Activity {
         Section sLike = new Section("双击视频改为打开评论", false, null, () -> swDtap.isChecked() ? "已开启" : "未开启");
         sLike.body.addView(switchRow("双击视频时打开评论", "双击不再点赞，也不出红心", swDtap));
         place(sLike);
+
+        swProfFav = new Switch(this);
+        Section sProf = new Section("我的主页默认「喜欢」", false, null, () -> swProfFav.isChecked() ? "已开启" : "未开启");
+        sProf.body.addView(switchRow("点「我」默认显示喜欢", "进个人主页时直接停在「喜欢」标签（最后一个标签）；自己点其他标签不受影响", swProfFav));
+        place(sProf);
 
         // ================= 视频页
         beginGroup(root, "视频页");
@@ -632,6 +637,7 @@ public class MainActivity extends Activity {
         DanmakuConfig c = DanmakuConfig.fromText(sp.getString("cfg", ""));
         swEnabled.setChecked(c.enabled);
         swDtap.setChecked(c.dtapToComment);
+        swProfFav.setChecked(c.profFav);
         swTime.setChecked(c.timeAlways);
         etIdle.setText(String.valueOf(c.idleExitMin));
         for (int i = 0; i < TAB_LABELS.length; i++) {
@@ -674,6 +680,7 @@ public class MainActivity extends Activity {
         c.enabled = swEnabled.isChecked();
         c.mode = segIndex(segMode) == 1 ? 1 : 0;
         c.dtapToComment = swDtap.isChecked();
+        c.profFav = swProfFav.isChecked();
         c.timeAlways = swTime.isChecked();
         c.pubAlways = swPub.isChecked();
         c.timeSize = timeSizeF.v;
@@ -778,6 +785,8 @@ public class MainActivity extends Activity {
             {"cap.draw", "视频文案：绘制时改色"},
             {"live.page", "直播间开播时间：直播间页面"},
             {"live.room", "直播间开播时间：房间数据"},
+            {"prof.pager", "我的主页默认喜欢：个人主页翻页（ViewPager#setCurrentItem）"},
+            {"prof.tap", "我的主页默认喜欢：认底部「我」和页内标签的点击（View#performClick）"},
     };
 
     /** 用 root 读抖音数据目录里的 hooks.properties（抖音进程自己写的），列出每个钩子的状态。 */
