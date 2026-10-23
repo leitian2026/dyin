@@ -458,6 +458,6 @@ final class DanmakuHook {
             case 4: r = t; g = pp; b = v; break;
             default: r = v; g = pp; b = q; break;
         }
-        return (Math.round(r * 255f) << 16) | (Math.round(g * 255f) << 8) | Math.round(b * 255f);
+        return LineBg.legible((Math.round(r * 255f) << 16) | (Math.round(g * 255f) << 8) | Math.round(b * 255f)); // 太暗的色（纯蓝等）提亮，黑底上才看得清
     }
 }
