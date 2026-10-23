@@ -23,6 +23,13 @@
 ## 使用
 设置页的内容按功能折叠成一个个分组（点标题展开，展开一个其他自动收起；有总开关的分组不用展开就能开关）。前提：LSPosed 里启用模块、作用域勾选抖音、强杀抖音重开；改完点底部「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
+## 1.32.1：个人主页默认「喜欢」改成「只听用户自己点的」
+
+- **改了什么**：1.32.0 是「点到底部『我』开 3 秒窗口」，要认底部标签、扫文字、挂全局的 `View.performClick`，太绕。现在只有一条规则：`ProfileViewPager` 被切页时，**不是用户自己点页内标签引起的，一律切到最后一页（喜欢）**。抖音每次进主页都会自己调 `setCurrentItem` 恢复标签，这些都不是用户点的，所以每次进「我」都落在「喜欢」；你点「作品」等页内标签时那次切页放过。
+- **钩子**：`prof.tap` 改成 `DmtTabLayout$TabView` 自己声明的 `performClick`（走 `HookGuard.hook`，不再是全局钩子），只记一个时刻；`prof.pager` 不变（`ViewPager#setCurrentItem` 两个重载）。去掉了 `BottomTab`、文字扫描、3 秒窗口。`RULES_REV` 加一。
+- **依据**（TextRec 40.9.0，`textrec-tasks-20261024-071912`）：分页控件和适配器整个进程只建一次（对象身份相同，`setAdapter` 只出现一次）；每次进主页抖音调 `setCurrentItem(记住的标签)`（0 或 4）；点页内标签是 `TabView.performClick` → 20 毫秒内 `setCurrentItem`。
+- **局限**：没编译、没上机。别人的主页如果也是同一个 `ProfileViewPager`，进去也会落在最后一页（没抓过别人的主页）；「喜欢是最后一页」只有一个账号的证据。
+
 ## 1.32.0：点「我」默认显示个人主页的「喜欢」标签
 
 - **开关**：设置页「我的主页默认『喜欢』」。配置项 `profFav`，默认关。新钩子两个：`prof.pager`（`androidx.viewpager.widget.ViewPager#setCurrentItem` 两个重载，按 `ProfileViewPager` 过滤）和 `prof.tap`（`View#performClick`，按 `BottomTab` / `DmtTabLayout$TabView` 过滤）。**全部是没混淆的类名和方法名**，没有放宽匹配。
