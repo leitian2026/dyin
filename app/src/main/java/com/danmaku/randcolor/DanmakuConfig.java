@@ -30,6 +30,8 @@ public final class DanmakuConfig {
     public int timeColor = 0, pubColor = 0;
     /** 视频文案的颜色（0xAARRGGBB，不透明）；0 = 不改，用抖音原来的颜色。话题、@ 这类抖音自己上色的文字不受影响。 */
     public int capColor = 0;
+    /** 视频作者名的颜色（0xAARRGGBB，不透明）；0 = 不改，用抖音原来的颜色。作者名的灰色底跟「文字灰色底」的不透明度 lineBg 走（0 = 不画）。见 PubHook.NameHook。 */
+    public int nameColor = 0;
     /** 直播间里显示开播时间（只在直播间页面里画，别处不显示）。 */
     public boolean liveTime = false;
     /** 取哪个时间：0 = 开播时间（没有就用创建时间）  1 = 房间创建时间。 */
@@ -80,6 +82,7 @@ public final class DanmakuConfig {
             p.setProperty("timeColor", String.valueOf(timeColor));
             p.setProperty("pubColor", String.valueOf(pubColor));
             p.setProperty("capColor", String.valueOf(capColor));
+            p.setProperty("nameColor", String.valueOf(nameColor));
             p.setProperty("idleExitMin", String.valueOf(idleExitMin));
             p.setProperty("liveTime", String.valueOf(liveTime));
             p.setProperty("liveSrc", String.valueOf(liveSrc));
@@ -193,6 +196,7 @@ public final class DanmakuConfig {
         c.timeSize = parseSize(p.getProperty("timeSize", "20"), 20);
         c.pubSize = parseSize(p.getProperty("pubSize", "16"), 16);
         c.capColor = parseColor(p.getProperty("capColor", "0"));
+        c.nameColor = parseColor(p.getProperty("nameColor", "0"));
         c.timeColor = parseColor(p.getProperty("timeColor", "0"));
         c.pubColor = parseColor(p.getProperty("pubColor", "0"));
         c.barOn = Boolean.parseBoolean(p.getProperty("barOn", "true").trim());
