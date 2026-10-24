@@ -55,7 +55,7 @@ public class MainActivity extends Activity {
     private LinearLayout segMode, statusCard;
     /** 时长 / 发布信息的字号（sp）、三处颜色（0 = 默认 / 不改）、发布信息的积木列表。 */
     private SizeField timeSizeF, pubSizeF;
-    private ColorField timeColorF, pubColorF, capColorF;
+    private ColorField timeColorF, pubColorF, capColorF, nameColorF;
     private final java.util.ArrayList<Block> blocks = new java.util.ArrayList<>();
     private LinearLayout blockList;
     /** 直播间开播时间：开关、取哪个时间、模板、字号、颜色。位置（百分比）不在设置页调，在抖音里用浮窗拖，这里只存 / 显示。 */
@@ -225,6 +225,15 @@ public class MainActivity extends Activity {
         capNote.setPadding(0, dp(6), 0, 0);
         sCap.body.addView(capNote);
         place(sCap);
+
+        nameColorF = new ColorField("不改（抖音原来的颜色）", "选择作者名颜色");
+        Section sName = new Section("视频作者名", false, null,
+                () -> "颜色 " + (nameColorF.color == 0 ? "不改" : "自定义") + " · 灰色底 " + (bgF.v == 0 ? "关" : bgF.v + "%"));
+        sName.body.addView(nameColorF.row("作者名颜色"));
+        TextView nameNote = note("视频左下角的作者名（@xxx）。灰色底和上面「文字灰色底」共用不透明度和底色，不透明度 0% 就不加；改回「不改」马上恢复。颜色可以选色表，也可以输入 6 位自定义色值。");
+        nameNote.setPadding(0, dp(6), 0, 0);
+        sName.body.addView(nameNote);
+        place(sName);
 
         // ================= 直播间
         beginGroup(root, "直播间");
@@ -653,6 +662,7 @@ public class MainActivity extends Activity {
         timeColorF.set(c.timeColor);
         pubColorF.set(c.pubColor);
         capColorF.set(c.capColor);
+        nameColorF.set(c.nameColor);
         setSeg(segMode, c.mode == 1 ? 1 : 0);
         swLive.setChecked(c.liveTime);
         setSeg(segLiveSrc, c.liveSrc == 1 ? 1 : 0);
@@ -689,6 +699,7 @@ public class MainActivity extends Activity {
         c.timeColor = timeColorF.color;
         c.pubColor = pubColorF.color;
         c.capColor = capColorF.color;
+        c.nameColor = nameColorF.color;
         c.liveTime = swLive.isChecked();
         c.liveSrc = segIndex(segLiveSrc) == 1 ? 1 : 0;
         String lft = etLiveFmt.getText().toString();
@@ -784,6 +795,7 @@ public class MainActivity extends Activity {
             {"pub.text", "视频文案：改色 / 灰色底 / 接手容器（上顶、文案下方位置）（设置文字时）"},
             {"pub.anchor", "视频文案：认文案控件 / 容器 / 页面根的类（上顶、改色、灰色底都要）"},
             {"cap.draw", "视频文案：绘制时改色"},
+            {"name.draw", "视频作者名：绘制时改色 / 灰色底"},
             {"live.page", "直播间开播时间：直播间页面"},
             {"live.room", "直播间开播时间：房间数据"},
             {"prof.pager", "我的主页默认喜欢：个人主页翻页（ViewPager#setCurrentItem）"},
