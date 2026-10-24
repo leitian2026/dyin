@@ -23,6 +23,14 @@
 ## 使用
 设置页的内容按功能折叠成一个个分组（点标题展开，展开一个其他自动收起；有总开关的分组不用展开就能开关）。前提：LSPosed 里启用模块、作用域勾选抖音、强杀抖音重开；改完点底部「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
+## 1.35.0：个人主页默认「喜欢」改成「点底部『我』触发 + 一次主动切页」
+
+- **改了什么**：不再改抖音自己的 `setCurrentItem` 参数（1.33.0 / 1.34.0 的「重申当前页就改成喜欢」去掉了）。现在两步：①触发 `prof.enter`（编号 15）= `MainPageFragment$2#onChanged(Object)`，参数是 Pair，`toString()` 以 `(USER,` 开头 = 切到底部「我」；②对个人主页分页控件调一次 `setCurrentItem(99, false)`（越界，`ViewPager` 自己收成最后一页 = 喜欢）。**不扫视图树、不认标签文字、不依赖标签个数**。
+- **分页控件从哪来**：`prof.pager`（原有）只做一件事：`ViewPager#setCurrentItem` 两个重载里认出 `this` 是 `ProfileViewPager` 就记一个弱引用（只在换对象时才分配）。触发时没记到就什么都不做。所以共两个钩子（`prof.pager` + `prof.enter`），设置页「钩子状态」里各有一行。`RULES_REV` 4 → 5。
+- **依据**（TextRec 40.9.0，`textrec-tasks-20261024-141908`）：`MainPageFragment$2#onChanged` 类名、方法名没混淆，签名 `public final (Object) → void`，只有 1 个重载，实现的是 `androidx.lifecycle.Observer#onChanged`（栈：`NextLiveData$NextObserver.onChanged ← LiveData.considerNotify ← dispatchingValue ← setValue`，主线程），启动后 28ms 就能找到；点「我」调 `(USER, TabRouteConfig(enterFrom='change_selected_bottom_tab', …))`，点「首页」调 `(HOME, …)`。冷启动第一次：`setAdapter(ProfileViewPager)` 19329ms → `setCurrentItem(0)` 第一次 19351ms → `onChanged(USER)` 19603ms → `(0)` 共 4 次到 20154ms；第二次进「我」：`onChanged(USER)` 56995ms，抖音自己的 `setCurrentItem(0)` 57463ms。
+- **最大的风险（上机先看这个）**：抖音自己恢复标签的 `setCurrentItem` 在触发**之后**才来（晚 468ms；冷启动时 4 次里有一部分）。它如果是写死的 `(0)`，会把我们切好的「喜欢」又切回「作品」；如果它读的是「记住的标签」且我们切页后这个记录跟着更新，就不会。追踪里没有证据，没上机不知道。如果被盖掉，要在 `prof.pager` 里重新加「改参数」，不能只靠触发。
+- **局限**：没编译、没上机；「参数是 Pair」来自 `toString` 的格式（没看到类名），格式变了就不触发（安静失效）；`toString()` 只在每次底部切页时做一次；「喜欢是最后一页」只有一个账号的证据。没挂上时个人主页保持原样。
+
 ## 1.34.0：视频作者名可改颜色（自定义色值）+ 加灰色底
 
 - **设置页**：新分组「视频作者名」：「作者名颜色」（色表 24 色 + 6 位自定义色值，默认「不改」），配置项 `nameColor`。灰色底**不单独开关**，跟「文字灰色底」的不透明度 `lineBg` 和底色 `lineBgColor` 走（0% = 不加）。
