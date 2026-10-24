@@ -23,6 +23,15 @@
 ## 使用
 设置页的内容按功能折叠成一个个分组（点标题展开，展开一个其他自动收起；有总开关的分组不用展开就能开关）。前提：LSPosed 里启用模块、作用域勾选抖音、强杀抖音重开；改完点底部「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
 
+## 1.34.0：视频作者名可改颜色（自定义色值）+ 加灰色底
+
+- **设置页**：新分组「视频作者名」：「作者名颜色」（色表 24 色 + 6 位自定义色值，默认「不改」），配置项 `nameColor`。灰色底**不单独开关**，跟「文字灰色底」的不透明度 `lineBg` 和底色 `lineBgColor` 走（0% = 不加）。
+- **新钩子**：`name.draw`（编号 14，`DmtTextView#onDraw(Canvas)`，类名、方法名都没混淆，`RULES_REV` 不变）。回调里：开关 → 是不是 TextView → `getId()` 和缓存的 `title` 资源 id 比整数 → 比 tag → 才处理；画之前换 `mCurTextColor`、画灰色底（`LineBg.drawBars`），画完换回来（和 `cap.draw` 同一套办法，不调 `setTextColor`）。
+- **作者名怎么认**：`DmtTextView` + 资源 id 名 `title` + 往上 8 层里有 `AwemeIntroInfoLayout`。同一行里 `nsj`、`l+b` 这类混淆的名字不用，直播预览卡的 `LivePreviewNickNameWidget`、`VHWidget` 也不碰。第一次认出时给控件打 tag（TRUE / FALSE），以后一次整数比较 + 一次 tag 比较就决定处不处理；`title` 的资源 id 在第一次绘制回调里查一次（`getIdentifier`），不是每次。
+- **功耗**：功能没开（`nameColor == 0` 且 `lineBg <= 0`）不挂钩子；开着时，不是作者名的 `DmtTextView` 每次绘制只多做几次字段 / 整数比较，没有分配对象、没有反射、没有日志、没有定时器。回到前台时只给这一页容器里的作者名 `invalidate()` 一次，设置改了马上生效（改回「不改」也不用重启抖音）。
+- **降级**：`mCurTextColor` 读不到只少「改色」，灰色底照常；`DmtTextView` 找不到走 `waitFail`；在、但没有 `onDraw(Canvas)` 才 `miss`；没挂上时作者名保持抖音原样。
+- **局限**：①没编译、没上机；②依据是 TextRec 的作者名追踪结果（`title`、`AwemeIntroInfoLayout`、`DmtTextView#onDraw` 栈第 1 层），没有记下任务编号和抖音版本，没看到完整绘制栈，装上后用设置页「钩子状态」看 `name.draw` 是不是 ✓，作者名没变色就再追踪一次；③作者名如果不是直接的 `DmtTextView`（被子类重写 `onDraw` 又不调 `super`）这个钩子走不到；④灰色底在控件边界处可能被裁掉一点（和文案一样）；⑤「点作者名会暂停」不是这个钩子的事，没动。
+
 ## 1.33.1：双击改评论换了找评论按钮的办法，找不到时放行
 
 - **改了什么**：①评论按钮不再按描述文字「评论N，按钮」在整个窗口里找，改成在**被双击的这一页**（`dtap.cut` 回调里的 `this`，即这一页的 `MonitorScrollFrameLayout`）的子树里按类名找 `FeedCommentImageView`，点它的**父级**（`comment_container`）；去掉了「可见面积最大」「向上 4 层 / 向下 1 层找监听」「最多遍历 8000 个」，也去掉了 `CommentHook.top`（回到前台记 Activity）。②找不到评论按钮（视频没有评论、按钮不可见、父级没有点击监听、抖音改了类名）时**放行**：不拦双击、不跳过单击处理，双击照常点赞；之前是照样拦住，双击既不点赞也不开评论。③新增钩子 id `dtap.btn`（编号 13）：只用 `HookGuard.find` 确认 `FeedCommentImageView` 这个类还在，不挂钩（和 `pub.anchor` 一样）；类一直找不到会显示在设置页「钩子状态」里，之前按钮找不到是静默的。
