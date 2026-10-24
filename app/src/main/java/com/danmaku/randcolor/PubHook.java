@@ -91,6 +91,7 @@ final class PubHook {
     private static final int CAP_TAG = 0x7e0b0c01;    // 认出是视频文案（cap.draw 只改打过 tag 的）
     private static final int ROOT_TAG = 0x7e0b0c04;   // VideoViewHolderRootView 上挂这一页的 Rows
     private static final int CAPW_TAG = 0x7e0b0c07;   // 文案控件上挂了布局监听
+    private static final int NAME_TAG = 0x7e0b0c0b;   // 作者名认过了：TRUE = 是（在 AwemeIntroInfoLayout 里的 id=title），FALSE = 不是
 
     /** 发布信息 / 时长默认字色（配置里 pubColor / timeColor 为 0 时用）。 */
     private static final int ROW_COLOR = 0xCCFFFFFF, TIME_COLOR = 0xFFFFFFFF;
@@ -103,6 +104,14 @@ final class PubHook {
     private static final XC_MethodHook TEXT_HOOK = new TextHook();
     private static final XC_MethodHook BIND_HOOK = new BindHook();
     private static final XC_MethodHook DRAW_HOOK = new DrawHook();
+    private static final XC_MethodHook NAME_HOOK = new NameHook();
+
+    /** 资源 id「title」的整数值（第一次绘制回调里查一次；0 = 还没查 / 没有）。nameIdTried：查过了（查不到就不再查）。主线程用。 */
+    private static int nameId;
+    private static boolean nameIdTried;
+    // name.draw：onDraw 前后临时换 mCurTextColor（主线程绘制，不重入；和 cap.draw 各用各的）
+    private static boolean nameSwapped;
+    private static int nameSaved;
 
     private static final HookGuard.Filter SET_TEXT = new HookGuard.Filter() {
         @Override
@@ -226,6 +235,7 @@ final class PubHook {
         tryAnchor(cl, ctx);
         tryText(cl, ctx);
         tryDraw(cl, ctx);
+        tryName(cl, ctx);
     }
 
     /**
@@ -376,6 +386,37 @@ final class PubHook {
                 "MentionTextView 里没有 onDraw(Canvas)（文案的绘制方法变了，需要重新用 TextRec 看绘制栈）", cl, ctx);
     }
 
+    /**
+     * name.draw：挂 DmtTextView 里的 onDraw(Canvas)，给视频作者名换字色、画灰色底（1.34.0）。
+     * 依据（TextRec 追踪结果，作者名那一行）：作者名是 DmtTextView，资源 id 名 title（可读，没混淆），在 AwemeIntroInfoLayout 里面；
+     * 它的绘制栈第 1 层是 DmtTextView#onDraw（和 cap.draw 记录的 DmtTextView.onDraw ← MentionTextView.onDraw 是同一个方法）。
+     * 同一行里别的控件（nsj、l+b 之类）名字是混淆的，不用。没有记下追踪的任务编号和抖音版本，换版本后要再看一次作者名的 id 和祖先。
+     * 这个钩子是通用文字控件的 onDraw，每个 DmtTextView 每次绘制都会进回调，所以：功能没开（nameColor == 0 且 lineBg <= 0）不挂；
+     * 回调里先看开关、再比 id 整数、再看 tag，不是作者名的控件在第三步之内就返回，没有分配、反射、日志。
+     * mCurTextColor 读不到时只少「改色」，灰色底照常；DmtTextView 找不到走 waitFail，在但没有 onDraw(Canvas) 才 miss。
+     */
+    private static void tryName(ClassLoader cl, ClassLoader ctx) {
+        if (HookGuard.settled(HookGuard.NAME_DRAW)) return;
+        if (!nameOn()) return; // 作者名改色 / 灰色底都没开：不挂（没有结论，设置里打开后回到前台再挂）
+        if (fCurColor == null) {
+            try {
+                Field f = TextView.class.getDeclaredField("mCurTextColor");
+                if (f.getType() == int.class) {
+                    f.setAccessible(true);
+                    fCurColor = f;
+                }
+            } catch (Throwable ignored) { // 少「改色」，灰色底照常
+            }
+        }
+        HookGuard.hook(HookGuard.NAME_DRAW, DMT, ON_DRAW, NAME_HOOK,
+                "DmtTextView 里没有 onDraw(Canvas)（作者名的绘制方法变了，需要重新用 TextRec 看作者名的绘制栈）", cl, ctx);
+    }
+
+    private static boolean nameOn() {
+        DanmakuConfig c = DanmakuHook.cfg;
+        return c.nameColor != 0 || c.lineBg > 0;
+    }
+
     private static boolean isMain() {
         return Looper.myLooper() == Looper.getMainLooper();
     }
@@ -482,6 +523,72 @@ final class PubHook {
             } catch (Throwable ignored) {
             }
         }
+    }
+
+    /**
+     * 画作者名之前换字色、画灰色底，画完换回来。DmtTextView 的每次绘制都会进来，所以顺序是：
+     * 开关 → 是不是 TextView → id 整数 → tag（第一次才沿父级找容器）。只处理 AwemeIntroInfoLayout 里 id=title 的那个控件。
+     * 任何异常都不能抛回抖音。
+     */
+    private static final class NameHook extends XC_MethodHook {
+        @Override
+        protected void beforeHookedMethod(MethodHookParam p) {
+            nameSwapped = false;
+            try {
+                DanmakuConfig cf = DanmakuHook.cfg;
+                if (cf.nameColor == 0 && cf.lineBg <= 0) return;
+                Object self = p.thisObject;
+                if (!(self instanceof TextView)) return;
+                TextView t = (TextView) self;
+                int id = nameId;
+                if (id == 0) {
+                    if (nameIdTried) return;
+                    nameIdTried = true; // 只查一次：资源名 title 在抖音自己的包里
+                    nameId = id = t.getResources().getIdentifier("title", "id", t.getContext().getPackageName());
+                    if (id == 0) return;
+                }
+                if (t.getId() != id) return;
+                Object tag = t.getTag(NAME_TAG);
+                if (tag == null) {
+                    if (introCls == null) return; // 容器类还没找到：先不下结论，下次绘制再认
+                    tag = introOf(t) != null ? Boolean.TRUE : Boolean.FALSE; // 不在视频信息容器里的 title（别处的标题）打 FALSE，以后一次 tag 比较就返回
+                    t.setTag(NAME_TAG, tag);
+                }
+                if (tag != Boolean.TRUE) return;
+                int bg = cf.lineBg;
+                if (bg > 0 && p.args != null && p.args.length > 0 && p.args[0] instanceof android.graphics.Canvas) {
+                    LineBg.drawBars((android.graphics.Canvas) p.args[0], t, bg); // 灰色底：画在字之前
+                }
+                int want = cf.nameColor;
+                Field f = fCurColor;
+                if (want == 0 || f == null) return;
+                int old = f.getInt(t);
+                if (old == want) return;
+                nameSaved = old;
+                f.setInt(t, want);
+                nameSwapped = true;
+            } catch (Throwable ignored) {
+            }
+        }
+
+        @Override
+        protected void afterHookedMethod(MethodHookParam p) {
+            if (!nameSwapped) return;
+            nameSwapped = false;
+            try {
+                Field f = fCurColor;
+                if (f != null && p.thisObject != null) f.setInt(p.thisObject, nameSaved);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** 回到前台：这一页的容器里的作者名重画一次（设置改了马上生效，包括改回「不改」和关灰色底）。没有分配，只在回到前台时走。 */
+    private static void invalidateName(View v, int depth) {
+        if (v.getId() == nameId && v instanceof TextView) v.invalidate();
+        if (depth <= 0 || !(v instanceof ViewGroup)) return;
+        ViewGroup g = (ViewGroup) v;
+        for (int i = 0, n = g.getChildCount(); i < n; i++) invalidateName(g.getChildAt(i), depth - 1);
     }
 
     // ------------------------------------------------------------ 页面：根、容器、登记
@@ -647,6 +754,7 @@ final class PubHook {
                     continue;
                 }
                 applyAll(r);
+                if (nameId != 0 && r.intro != null) invalidateName(r.intro, 8);
             }
             for (int i = INTROS.size() - 1; i >= 0; i--) {
                 ViewGroup g = INTROS.get(i).get();
