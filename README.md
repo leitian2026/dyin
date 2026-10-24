@@ -2,8 +2,8 @@
 
 ## 功能
 1. **弹幕随机色**：每条弹幕随机颜色，保留黑色描边。
-2. **拦截点赞**：双击视频不再点赞，也不出双击红心（1.29.0 起没有「右侧爱心按钮改评论」）。
-3. **打开评论**：双击视频改为打开当前视频的评论。双击这一路只走名字没混淆的 `onDoubleTap` + `MonitorScrollFrameLayout#onInterceptTouchEvent`（+ `handleSingleClick`）；1.26.4 起去掉了混淆名的 `LLLIILIL` 兜底。
+2. **拦截点赞**：双击视频不再点赞，也不出双击红心（1.29.0 起没有「右侧爱心按钮改评论」）。1.33.1 起，找不到评论按钮的视频（没有评论、抖音改了控件）双击照常点赞，不再「既不点赞也不开评论」。
+3. **打开评论**：双击视频改为打开当前视频的评论。双击这一路只走名字没混淆的 `onDoubleTap` + `MonitorScrollFrameLayout#onInterceptTouchEvent`（+ `handleSingleClick`）；1.26.4 起去掉了混淆名的 `LLLIILIL` 兜底；1.33.1 起评论按钮按类名 `FeedCommentImageView` 在这一页里找，不再按描述文字。
 4. **视频时长常显**（1.15）：自己放一行 `00:12 / 03:45`，随播放走动。1.22.0 起它是视频文案下面的一行（有发布日期地点时在它的正下方），可以调字号和颜色；1.27.0 起每个视频页自己带一个；1.28.0 起它是盖在页面上的浮层，位置全屏任意可调。
 
 5. **无操作自动退出**（1.17.8）：连续 N 分钟没有操作抖音（触摸、按键、回到前台都算操作），就结束抖音进程；后台也计时。设置页里填分钟数，0 = 关闭。
@@ -22,6 +22,14 @@
 
 ## 使用
 设置页的内容按功能折叠成一个个分组（点标题展开，展开一个其他自动收起；有总开关的分组不用展开就能开关）。前提：LSPosed 里启用模块、作用域勾选抖音、强杀抖音重开；改完点底部「保存并应用」（需要 root），抖音回到前台即生效。不推送则用默认：开启 + 鲜艳随机。
+
+## 1.33.1：双击改评论换了找评论按钮的办法，找不到时放行
+
+- **改了什么**：①评论按钮不再按描述文字「评论N，按钮」在整个窗口里找，改成在**被双击的这一页**（`dtap.cut` 回调里的 `this`，即这一页的 `MonitorScrollFrameLayout`）的子树里按类名找 `FeedCommentImageView`，点它的**父级**（`comment_container`）；去掉了「可见面积最大」「向上 4 层 / 向下 1 层找监听」「最多遍历 8000 个」，也去掉了 `CommentHook.top`（回到前台记 Activity）。②找不到评论按钮（视频没有评论、按钮不可见、父级没有点击监听、抖音改了类名）时**放行**：不拦双击、不跳过单击处理，双击照常点赞；之前是照样拦住，双击既不点赞也不开评论。③新增钩子 id `dtap.btn`（编号 13）：只用 `HookGuard.find` 确认 `FeedCommentImageView` 这个类还在，不挂钩（和 `pub.anchor` 一样）；类一直找不到会显示在设置页「钩子状态」里，之前按钮找不到是静默的。
+- **依据**（TextRec 40.9.0，`textrec-tasks-20261024-085052`、`textrec-tasks-20261024-085634`）：点评论图标那一下的控件链是 `MonitorScrollFrameLayout#w1m → … → FeedRightScaleView → HPFrameLayout#comment_layout → LinearLayout#e9v → FeedDoctorFrameLayout#comment_container → FeedCommentImageView`，都是在首页信息流里追到的（导出里「页面」标签有时是后台预加载的个人主页，不代表屏幕上的页面）；点图标正中间，`View#performClick` 的 this 是 `comment_container`（返回 true），点图标下面的数字则是 `TextSwitcher`；「评论16，按钮」这段描述同时挂在 `e9v` 和 `FeedCommentImageView` 上；下一页的侧栏会提前预加载，所以必须只在当前页里找。`LongPressLayout` 确实在 `MonitorScrollFrameLayout` 的子树里（`CommentHook` 注释里原先写的「没有证据」的推断，现在有了）。
+- **没动**：`dtap.seen` / `dtap.cut` / `dtap.click` 的匹配规则、两个 800ms、开关；所以不加 `RULES_REV`。
+- **局限**：只验证了 40.9.0 一个版本；只在首页信息流里验证过，从个人主页进入的视频流没有追踪过；`FeedCommentImageView` 的类名没混淆是从追踪结果看到的，抖音升级后要再确认。没编译、没上机。
+- **行为变化提醒**：没有评论按钮的视频（评论关闭、部分广告）双击现在会点赞。要恢复成「不点赞」，把 `CommentHook.DtapCutHook` 里 `if (target == null) return;` 改成「照样 `p.setResult(Boolean.TRUE)`」即可。
 
 ## 1.33.0：个人主页默认「喜欢」去掉所有点击检测，只钩切页这一个动作
 
