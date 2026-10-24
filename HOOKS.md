@@ -45,7 +45,7 @@ LSPosed 日志里会出现两种关键行（只在状态变成「放弃」「不
 | `HookGuard.java` | 钩子编号 / id 清单、状态、停止条件、落盘、`find` / `hook` / `ok` / `miss` / `waitFail` |
 | `DanmakuHook.java` | 入口 `init(lp)`、`hookResume()`（每次回到前台的重试入口）、弹幕 `paint` 钩子（分档匹配示例） |
 | `TimeHook.java` | 时长进度：1 个钩子 `time.progress`（`OnUIPlayListenerDelegate#onPlayProgressChange`，单方法按名字匹配的示例），把 id / 位置 / 总时长转给 `PubHook.onProgress` |
-| `CommentHook.java` | 双击改评论：3 个没混淆的钩子（`dtap.seen` 系统方法、`dtap.cut` 在拦截判断里改结果，两个都挂上才生效；`dtap.click` 跳过随后的单击暂停） |
+| `CommentHook.java` | 双击改评论：3 个没混淆的钩子（`dtap.seen` 系统方法、`dtap.cut` 在拦截判断里改结果，两个都挂上才生效；`dtap.click` 跳过随后的单击暂停）+ `dtap.btn`（只找评论按钮的类 `FeedCommentImageView`，不挂钩，类没了设置页能看到）。评论按钮在被双击的这一页（`dtap.cut` 回调里的 `this`）的子树里按类名找，点它的**父级**；找不到就放行，双击照常点赞 |
 | `MainActivity.java` | 设置页（折叠分组 `Section`）；`HOOK_NAMES` 是「钩子 id → 中文名」，`describeHooks` 解析 `hooks.properties` |
 | `PubHook.java` | 发布日期地点、视频时长、文案样式。核心钩子 `pub.bind`（`VideoViewHolder#bind(Aweme, …)` after：按运行时类型取页面根 `VideoViewHolderRootView`，发布信息 / 时长两个浮层盖在页面根上（位置全屏可调），aid → 页面登记在 `PAGES` 里给进度回调用；3 个类（holder / Aweme / 页面根）按名字找，缺哪个都是「类没找到」）；文案样式和上顶另外 3 个：`pub.anchor`（只找类不挂钩：两个文案类、容器 `AwemeIntroInfoLayout`、页面根 `VideoViewHolderRootView`；上顶和文案下方位置不再依赖 `pub.bind` 装成功）、`pub.text`（`DmtTextView#setText` 通用控件，回调里先比较 `this` 的类；文案样式在这里套，**容器也从这里来**：文案第一次认出时沿父级找到 `AwemeIntroInfoLayout`，往上找 `VideoViewHolderRootView` 登记这一页，接手容器——整个容器 `translationY` 上移，下面留出空位给发布地和时长；1.30.0 起没有 `pub.intro` 和「从根往下找」，容器只有这一个入口；文案样式、上顶、文案下方位置有一个开着就挂）、`cap.draw`（`MentionTextView#onDraw`） |
 | `TabHook.java` | 首页顶部标签隐藏：类名按没混淆的 `HomeTopTabItemViewNew` 找（走 HookGuard），挂框架方法 `View.setContentDescription` 并按这个类过滤 |
