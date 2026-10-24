@@ -53,7 +53,7 @@ LSPosed 日志里会出现两种关键行（只在状态变成「放弃」「不
 | `LiveHook.java` | 直播间开播时间：钩 `LivePlayFragmentV2#onViewCreated`（记页面）和 `Room#getCreateTime`（触发刷新），文字叠在页面根控件的 ViewOverlay 上，位置按百分比放；格式在 `LiveFormat.java` |
 | `LivePosPanel.java` | 开播时间的位置浮窗（不是钩子）：设置页点「去抖音里调整」后配置里 `liveAdjust=true`，`LiveHook` 刷新时把屏幕上的直播页交给它，它在窗口最上层盖触摸层 + 小浮窗，拖动 / 微调 / 完成 / 取消；只在调节模式里存在，没有定时器 |
 | `VidPosPanel.java` | 发布日期地点行 / 视频时长行的位置浮窗（不是钩子）：`vidAdjust=true` 时 `PubHook.onResume` 把当前 Activity 交给它，盖触摸层 + 小浮窗，拖动调浮层位置 `pubX/pubY/timeX/timeY`（dp）；只在调节模式里存在，没有定时器 |
-| `ProfHook.java` | 个人主页默认「喜欢」：2 个钩子。`prof.pager`（`ViewPager#setCurrentItem` 两个重载，只记 `ProfileViewPager` 的弱引用，不改参数）、`prof.enter`（`MainPageFragment$2#onChanged`，参数 Pair 以 `(USER,` 开头 = 点底部「我」，触发时对记下的分页控件调 `setCurrentItem(99, false)`）。没有扫描、没有定时器 |
+| `ProfHook.java` | 个人主页默认「喜欢」：2 个钩子。`prof.pager`（`ViewPager#setCurrentItem` 两个重载，只记 `ProfileViewPager` 的弱引用，不改参数）、`prof.enter`（`MainPageFragment$2#onChanged`，参数 Pair 以 `(USER,` 开头 = 点底部「我」，触发时对记下的分页控件调 `setCurrentItem(99, false)`）。没有扫描、没有点击检测；**唯一的延时消息是冷启动特例**：进程里第一次触发延迟 700ms 再切，之后每次立刻切 |
 | `RootShell.java` | `readFile(pkg, name)` 用 root 读抖音数据目录里的文件 |
 
 ## 3. 新增一个钩子：必须做的 6 步
@@ -154,7 +154,7 @@ FooHook.tryHook(cl);
 3. **「类没找到」和「类在但方法没匹配」必须分开**：前者 `waitFail`（有次数上限，不写放弃），后者 `miss`（立刻放弃并记住）。反过来会导致要么永远重试、要么类晚加载时被误判成不适配。
 4. **混淆过的名字不许放宽匹配**。只按签名去猜混淆方法，猜错了会误伤（例如把每次触摸都当成双击）。拿不准就不挂，`miss` 掉。
 5. **放宽匹配只能用没混淆的类型做依据**（`Canvas`、`DrawStyle`、`MotionEvent`、`long` 等）；结果有歧义（多个得分接近的候选）就**一个都不挂**。
-6. **没有定时器、没有轮询、没有周期性自检。**（唯一例外：`IdleExit` 的那一条延时消息——它是「无操作自动退出」功能本身，不是自检；不要把它当先例，更不要拿它来做钩子自检。） 自检只发生在 `tryHook`（启动 + 每次回到前台），且有次数上限。不要为了「检测是否还有效」去加 `Handler.postDelayed` / `Timer`。
+6. **没有定时器、没有轮询、没有周期性自检。**（只有两个写明的例外，**都不是先例，更不要拿它们来做钩子自检**：①`IdleExit` 的那一条延时消息——它是「无操作自动退出」功能本身；②`ProfHook` 的冷启动特例——进程里第一次点底部「我」时发**一条** 700ms 的延时消息再切到「喜欢」，之后不再发；原因是冷启动时抖音自己恢复标签的 `setCurrentItem(0)` 在触发后还有 3 次（最晚约 +552ms），立刻切会被盖回「作品」。） 自检只发生在 `tryHook`（启动 + 每次回到前台），且有次数上限。不要为了「检测是否还有效」去加 `Handler.postDelayed` / `Timer`。
 7. **热路径（钩子回调里）不分配对象、不反射、不打日志、不写文件。** 自检、日志、落盘都只发生在安装阶段。
 8. **钩子回调整体 `try { … } catch (Throwable ignored) {}`**，异常不能抛回抖音。
 9. **开关在回调里判断**，不要因为开关关着就不挂钩子。`HookGuard` 的状态含义是「钩子能不能装上」，不是「功能开没开」。
