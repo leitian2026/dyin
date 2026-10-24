@@ -1,24 +1,24 @@
 plugins { id 'com.android.application' }
 
 android {
-    namespace 'com.danmaku.randcolor'
+    namespace 'com.textrec.lsp'
     compileSdk 34
 
     defaultConfig {
-        applicationId 'com.danmaku.randcolor'
+        applicationId 'com.textrec.lsp'
         minSdk 27
         targetSdk 34
-        versionCode 96
-        versionName '1.35.2'
+        versionCode 46
+        versionName '1.32.0'
     }
 
     signingConfigs {
         release {
             // 固定签名：每次构建签名一致，才能覆盖安装
-            storeFile rootProject.file('randcolor.jks')
-            storePassword 'randcolor123'
-            keyAlias 'randcolor'
-            keyPassword 'randcolor123'
+            storeFile rootProject.file('textrec.jks')
+            storePassword 'tracelog123'
+            keyAlias 'tracelog'
+            keyPassword 'tracelog123'
         }
     }
 
