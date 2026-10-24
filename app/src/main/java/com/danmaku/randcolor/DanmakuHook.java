@@ -5,7 +5,6 @@ import android.app.Activity;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
-import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
@@ -118,7 +117,6 @@ final class DanmakuHook {
                         reload();
                         if (!(p.thisObject instanceof Activity)) return;
                         Activity a = (Activity) p.thisObject;
-                        CommentHook.top = new WeakReference<>(a);
                         PubHook.onResume(a);
                         LiveHook.onResume();
                         IdleExit.onResume();
