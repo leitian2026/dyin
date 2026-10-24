@@ -1,13 +1,10 @@
 package com.danmaku.randcolor;
 
-import android.app.Activity;
-import android.graphics.Rect;
 import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 
-import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 
@@ -22,13 +19,22 @@ import de.robv.android.xposed.XC_MethodHook;
  * 会把「前面的钩子到底有没有用」盖住，设置页里钩子状态再好看也不知道是不是真的在起作用。
  * 现在这条路径失效 = 双击恢复成点赞，一眼就能看出来。（LLLIILIL 的追踪证据：40.7.0 里一次双击 X.06y9.onTouch 只调它一次，红心和点赞都从它往下走。）
  *
- * 评论按钮的找法：contentDescription 形如"评论24，按钮"、可见面积最大的那个。
- * 找不到评论按钮时：双击不放行（双击不点赞）。
+ * 评论按钮的找法（1.33.1 起，不再按「评论N，按钮」这串描述文字找）：
+ *  - 只在被双击的这一页里找：afterHookedMethod 里的 this 就是这一页的 MonitorScrollFrameLayout，往下按类名找 FeedCommentImageView，
+ *    预加载的下一页有它自己的实例，不会混进来，所以不用比面积、不用 Activity 引用；
+ *  - 点它的「父级」（comment_container）：点击监听挂在父级上，不在图片控件上；
+ *  - 找不到（视频没有评论按钮 / 按钮不可见 / 父级没有点击监听 / 抖音改了类名）：放行，双击照常点赞（之前是照样拦住，双击没反应）。
+ * 依据（TextRec 40.9.0，textrec-tasks-20261024-085052、textrec-tasks-20261024-085634）：
+ *  - 点评论图标那一下的控件链：MonitorScrollFrameLayout#w1m → … → FeedRightScaleView → HPFrameLayout#comment_layout → LinearLayout#e9v
+ *    → FeedDoctorFrameLayout#comment_container → com.ss.android.ugc.aweme.feed.widget.right.FeedCommentImageView；
+ *    都是在首页信息流里追到的（TextRec 导出里「页面」标签偶尔会变成 FavProfileCommonTabFragment / PostProfileCommonTabFragment，那是后台预加载的个人主页，屏幕上的页面、文案和坐标都没变，不能当成「在喜欢列表里验证过」）；LongPressLayout#qbb 也在 MonitorScrollFrameLayout 的子树里；
+ *  - 点图标正中间：View#performClick 的 this = FeedDoctorFrameLayout#comment_container（返回 true，走 PerformClick.run 的正常点击路径）；
+ *    点图标下面的数字：this = TextSwitcher（另一个控件）；
+ *  - 「评论16，按钮」这段描述同时挂在 LinearLayout#e9v 和 FeedCommentImageView 上；下一页的侧栏会提前预加载（屏幕外就已经设好描述）。
+ * 没有证据的部分：只验证了 40.9.0 一个版本；只在首页信息流里验证过，从个人主页进入的视频流没有追踪过；没编译、没上机。
  */
 final class CommentHook {
     private CommentHook() {}
-
-    static volatile WeakReference<Activity> top = new WeakReference<>(null);
 
     /**
      * 双击的稳定名路径（40.7.0，TextRec：textrec-tasks-20261020-203447 / 20261021-032906 / 20261021-093511）：
@@ -59,6 +65,8 @@ final class CommentHook {
      */
     private static final String FEED_ROOT = "com.ss.android.ugc.aweme.feed.plato.core.FeedComponentsRoot";
     private static final String CLICK_METHOD = "handleSingleClick";
+    /** 评论按钮（图片控件）。类名没混淆；点击监听在它的父级上（见类注释里的依据）。只在运行时按类名比较，不挂钩。 */
+    private static final String BTN_CLASS = "com.ss.android.ugc.aweme.feed.widget.right.FeedCommentImageView";
     /** 拦住双击之后多久内，把单击处理跳过（单击处理比第一下点击晚 190~350ms，留够余量，又不影响之后真正的单击）。 */
     private static final long CLICK_SKIP_MS = 800;
     private static volatile long dtapAt;
@@ -75,7 +83,7 @@ final class CommentHook {
     private static final XC_MethodHook SEEN_HOOK = new DtapSeenHook();
     private static final XC_MethodHook CUT_HOOK = new DtapCutHook();
 
-    /** 三个钩子的类名、方法名都没混淆；找不到就放弃并记住（HookGuard），双击点赞照常。 */
+    /** 三个钩子的类名、方法名都没混淆；找不到就放弃并记住（HookGuard），双击点赞照常。另外 dtap.btn 只确认评论按钮的类还在（不挂钩）。 */
     static void tryHook(ClassLoader cl) {
         if (cl == null) return;
         // 名字没混淆的双击路径：识别双击（系统方法）+ 在点赞之前拦住（抖音的类，类名和方法名都没混淆，不放宽匹配）
@@ -85,6 +93,8 @@ final class CommentHook {
                 "MonitorScrollFrameLayout 里没有 onInterceptTouchEvent(MotionEvent)（抖音改了这个类，需要用 TextRec 重新追踪双击时的触摸分发）", cl);
         HookGuard.hook(HookGuard.DTAP_CLICK, FEED_ROOT, voidNamed(CLICK_METHOD), CLICK_HOOK,
                 "FeedComponentsRoot 里没有 void handleSingleClick（抖音改了单击处理，需要用 TextRec 重新追踪单击暂停的调用栈）", cl);
+        // 评论按钮的类还在不在（只找类不挂钩，和 pub.anchor 一样）：不在 = 双击会放行成点赞，设置页能看到
+        if (HookGuard.find(HookGuard.DTAP_BTN, BTN_CLASS, cl) != null) HookGuard.ok(HookGuard.DTAP_BTN, "");
     }
 
     /** 名字匹配、返回 void 的所有重载（handleSingleClick() / handleSingleClick(Float, Float) 都挂，跳过时返回 null 即可）。 */
@@ -123,7 +133,7 @@ final class CommentHook {
     /**
      * MonitorScrollFrameLayout.onInterceptTouchEvent：进来时记下「正在拦截判断」，出来时如果这一次里识别到了双击，
      * 就把结果改成 true（子视图收不到这个 DOWN，LongPressLayout 里的红心和点赞都不会发生）并打开评论。
-     * 找不到评论按钮也照样拦：双击不点赞。
+     * 找不到评论按钮（commentTarget 返回 null）：放行，不拦、不记 dtapAt，双击照常点赞。
      */
     private static final class DtapCutHook extends XC_MethodHook {
         @Override
@@ -144,11 +154,13 @@ final class CommentHook {
                 if (!dtapSeen) return;
                 dtapSeen = false;
                 if (p.hasThrowable()) return;
+                View target = commentTarget(p.thisObject);
+                if (target == null) return; // 找不到评论按钮：放行，双击照常点赞（也不记 dtapAt，不跳过单击处理）
                 long now = SystemClock.uptimeMillis();
                 dtapAt = now;
                 if (now - lastOpenAt >= REOPEN_GAP_MS) {
                     lastOpenAt = now;
-                    openComments();
+                    open(target);
                 }
                 p.setResult(Boolean.TRUE);
             } catch (Throwable ignored) {
@@ -171,12 +183,33 @@ final class CommentHook {
 
     // ------------------------------------------------------------ 打开评论
 
-    /** 找到当前页的评论按钮并点一下；找不到返回 false。 */
-    static boolean openComments() {
-        View btn = findCommentButton();
-        if (btn == null) return false;
-        final View target = clickable(btn);
-        // 等当前这次点击 / 手势处理完再点，避免在别人的回调里重入
+    /**
+     * 被双击的这一页里的评论按钮的点击目标：page（MonitorScrollFrameLayout）的子树里第一个可见的 FeedCommentImageView 的父级。
+     * 找不到 / 按钮不可见 / 父级没有点击监听 → null（调用方放行双击）。只在双击时调用，不在每次触摸里跑。
+     */
+    private static View commentTarget(Object page) {
+        if (!(page instanceof ViewGroup)) return null;
+        ArrayList<View> todo = new ArrayList<>();
+        todo.add((View) page);
+        while (!todo.isEmpty()) {
+            View v = todo.remove(todo.size() - 1);
+            if (v.getVisibility() != View.VISIBLE) continue;
+            if (BTN_CLASS.equals(v.getClass().getName())) {
+                Object par = v.getParent();
+                if (!(par instanceof View)) return null;
+                View t = (View) par;
+                return t.hasOnClickListeners() ? t : null;
+            }
+            if (v instanceof ViewGroup) {
+                ViewGroup g = (ViewGroup) v;
+                for (int i = 0; i < g.getChildCount(); i++) todo.add(g.getChildAt(i));
+            }
+        }
+        return null;
+    }
+
+    /** 等当前这次点击 / 手势处理完再点，避免在别人的回调里重入。 */
+    private static void open(final View target) {
         target.post(new Runnable() {
             @Override
             public void run() {
@@ -186,55 +219,5 @@ final class CommentHook {
                 }
             }
         });
-        return true;
-    }
-
-    /** contentDescription 形如"评论24，按钮"、可见、可见面积最大的那个（相邻几个视频的右侧栏可能同时挂在界面里）。 */
-    private static View findCommentButton() {
-        Activity a = top.get();
-        if (a == null) return null;
-        View root = a.getWindow().getDecorView();
-        ArrayList<View> todo = new ArrayList<>();
-        todo.add(root);
-        View best = null;
-        long bestArea = 0;
-        Rect r = new Rect();
-        int seen = 0;
-        while (!todo.isEmpty() && seen < 8000) {
-            View v = todo.remove(todo.size() - 1);
-            seen++;
-            if (v.getVisibility() != View.VISIBLE) continue;
-            CharSequence d = v.getContentDescription();
-            if (d != null && v.isShown()) {
-                String s = d.toString();
-                if (s.startsWith("评论") && s.endsWith("按钮") && v.getGlobalVisibleRect(r)) {
-                    long area = (long) r.width() * r.height();
-                    if (area > bestArea) {
-                        bestArea = area;
-                        best = v;
-                    }
-                }
-            }
-            if (v instanceof ViewGroup) {
-                ViewGroup g = (ViewGroup) v;
-                for (int i = 0; i < g.getChildCount(); i++) todo.add(g.getChildAt(i));
-            }
-        }
-        return best;
-    }
-
-    /** 自己 → 往上 4 层 → 往下一层，找第一个有点击监听的；都没有就点它自己。 */
-    private static View clickable(View btn) {
-        View v = btn;
-        for (int i = 0; i < 4 && v != null; i++) {
-            if (v.hasOnClickListeners()) return v;
-            Object p = v.getParent();
-            v = p instanceof View ? (View) p : null;
-        }
-        if (btn instanceof ViewGroup) {
-            ViewGroup g = (ViewGroup) btn;
-            for (int i = 0; i < g.getChildCount(); i++) if (g.getChildAt(i).hasOnClickListeners()) return g.getChildAt(i);
-        }
-        return btn;
     }
 }
