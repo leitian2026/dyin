@@ -122,7 +122,7 @@ public class MainActivity extends Activity {
 
         swProfFav = new Switch(this);
         Section sProf = new Section("我的主页默认「喜欢」", false, null, () -> swProfFav.isChecked() ? "已开启" : "未开启");
-        sProf.body.addView(switchRow("点「我」默认显示喜欢", "每次进个人主页都停在「喜欢」标签（最后一个标签）；你自己点其他标签不受影响", swProfFav));
+        sProf.body.addView(switchRow("点「我」默认显示喜欢", "每次点底部「我」都切到「喜欢」标签（最后一个标签）；进了以后你自己点其他标签不受影响", swProfFav));
         place(sProf);
 
         // ================= 视频页
@@ -798,7 +798,8 @@ public class MainActivity extends Activity {
             {"name.draw", "视频作者名：绘制时改色 / 灰色底"},
             {"live.page", "直播间开播时间：直播间页面"},
             {"live.room", "直播间开播时间：房间数据"},
-            {"prof.pager", "我的主页默认喜欢：个人主页翻页（ViewPager#setCurrentItem）"},
+            {"prof.pager", "我的主页默认喜欢：记住个人主页的翻页控件（ViewPager#setCurrentItem）"},
+            {"prof.enter", "我的主页默认喜欢：点底部「我」时切到喜欢（MainPageFragment$2#onChanged）"},
     };
 
     /** 用 root 读抖音数据目录里的 hooks.properties（抖音进程自己写的），列出每个钩子的状态。 */
