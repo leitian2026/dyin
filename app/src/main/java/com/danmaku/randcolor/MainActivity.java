@@ -117,7 +117,7 @@ public class MainActivity extends Activity {
 
         swDtap = new Switch(this);
         Section sLike = new Section("双击视频改为打开评论", false, null, () -> swDtap.isChecked() ? "已开启" : "未开启");
-        sLike.body.addView(switchRow("双击视频时打开评论", "双击不再点赞，也不出红心", swDtap));
+        sLike.body.addView(switchRow("双击视频时打开评论", "双击不再点赞，也不出红心；视频没有评论按钮时照常点赞", swDtap));
         place(sLike);
 
         swProfFav = new Switch(this);
@@ -777,6 +777,7 @@ public class MainActivity extends Activity {
             {"dtap.seen", "双击改评论：识别双击（系统方法）"},
             {"dtap.cut", "双击改评论：拦在点赞之前"},
             {"dtap.click", "双击改评论：不让单击暂停视频"},
+            {"dtap.btn", "双击改评论：评论按钮的类（找不到时双击照常点赞）"},
             {"time.progress", "视频时长：播放进度"},
             {"tab.hide", "首页顶部标签隐藏"},
             {"pub.bind", "发布日期地点 / 视频时长：翻页绑定（视频数据 + 页面容器）"},
