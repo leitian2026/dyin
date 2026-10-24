@@ -1,8 +1,5 @@
 package com.danmaku.randcolor;
 
-import android.os.Handler;
-import android.os.Looper;
-
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Method;
 
@@ -10,38 +7,38 @@ import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 
 /**
- * 个人主页默认停在「喜欢」（1.35.0 重写：触发 + 一次主动切页；不再改抖音自己的切页参数）。
+ * 个人主页默认停在「喜欢」（1.35.2：触发 + 一次主动切页 + 冷启动那 3 次恢复用「计数」改掉；没有定时器、没有延时消息）。
  *
- * 两步：
+ * 三件事：
  *  1. 触发 prof.enter = com.ss.android.ugc.aweme.main.MainPageFragment$2#onChanged(Object)：底部标签切换的观察者，参数是一个 Pair，toString 形如
  *     "(USER, TabRouteConfig(enterFrom='change_selected_bottom_tab', ...))"；第一项是 USER = 切到底部「我」，HOME = 切到首页。
  *  2. 动作：触发时对个人主页的分页控件调一次 setCurrentItem(99, false)；99 越界，ViewPager 自己收成最后一页（= 喜欢），不认标签、不扫视图树、不依赖标签个数。
- *     分页控件从哪来：prof.pager 挂 ViewPager#setCurrentItem 两个重载，只做一件事——认出 this 是 ProfileViewPager 就记一个弱引用（整个进程只建一次，只在换对象时才分配）。
+ *     分页控件从哪来：prof.pager 挂 ViewPager#setCurrentItem 两个重载，认出 this 是 ProfileViewPager 就记一个弱引用（整个进程只建一次，只在换对象时才分配）。
  *     触发时没有记下的对象 = 什么都不做。
- *  ★ 特例（1.35.1，唯一的延时消息，和 IdleExit 那一条一样是 HOOKS.md 里写明的例外，不是先例）：
- *     进程里**第一次**触发（= 冷启动后第一次点「我」）不立刻切，而是发一条 700ms 的延时消息再切；之后每次触发都是立刻切，不再发消息。
- *     原因：冷启动时抖音自己恢复标签的 setCurrentItem(0) 在触发之后还有 3 次（见下面「依据」），立刻切会被它们盖回「作品」。
- *     消息只发一次、不重复、不循环，不是轮询，也不是自检；回调里不分配（Handler 和 Runnable 都只建一次）。
+ *  3. 冷启动计数：进程里**第一次**触发（= 冷启动后第一次点「我」）时把 remaining 设成 COLD_RESTORES（3）；之后 ProfileViewPager 每收到一次 setCurrentItem(0)
+ *     （抖音自己恢复标签），参数改成 99 并 remaining 减一，减到 0 停。切到首页（HOME）时 remaining 清零。第二次起的触发不再计数（热启动只有 1 次恢复，读的是「记住的标签」，不会盖掉）。
+ *     没有定时器、不看时间，只数次数，和手机快慢无关。
  *
  * 依据（TextRec 40.9.0，textrec-tasks-20261024-141908，加上之前的 20261023-231633、20261024-071912）：
  *  - MainPageFragment$2#onChanged：类名、方法名没混淆；签名 public final (Object) → void，同名重载只有 1 个；实现的是 androidx.lifecycle.Observer#onChanged，
  *    调用栈 NextLiveData$NextObserver.onChanged ← LiveData.considerNotify ← dispatchingValue ← setValue（主线程），启动后 28ms 就能找到这个类。
  *    点「我」两次各调一次 (USER, …)，点「首页」调 (HOME, …)。
- *  - 冷启动第一次进「我」：setAdapter(ProfileViewPager) 在 19329ms、setCurrentItem(0) 第一次 19351ms、onChanged(USER) 19603ms、setCurrentItem(0) 一共 4 次到 20154ms。
- *    所以触发时分页控件已经建好，也已经被 prof.pager 记下；但抖音那 4 次 (0) 有一部分在触发之后。
- *  - 冷启动那 4 次 (0) 的来源和时间：19351（DmtTabLayout.onTabSelected，在触发之前）、19827（X.18rI.run，触发后 +224ms）、19836（PandaProfileMyPager#LJJLJLI，+233ms）、
- *    约 20155（同 LJJLJLI，+552ms）。所以触发后 +552ms 以后切才不会被盖回去；延时取 700ms，只比最后一次多 148ms。
- *  - 第二次进「我」（任务 4）：onChanged(USER) 在 56995ms，抖音自己的 setCurrentItem(0) 在 57463ms，晚 468ms。
+ *  - 冷启动第一次进「我」，ProfileViewPager 上的 setCurrentItem(0) 共 4 次：19351ms（DmtTabLayout.onTabSelected，在触发之前，不算）、
+ *    19827ms（X.18rI.run，触发后 +224ms）、19836ms（PandaProfileMyPager#LJJLJLI，+233ms）、约 20155ms（同 LJJLJLI，+552ms）；onChanged(USER) 在 19603ms。
+ *    触发之后的 3 次就是 COLD_RESTORES = 3 的来源。setAdapter(ProfileViewPager) 在 19329ms，所以触发时分页控件已经建好、已被 prof.pager 记下。
+ *  - 第二次进「我」（任务 4）：onChanged(USER) 在 56995ms，抖音自己的 setCurrentItem(0) 只有 1 次，在 57463ms（+468ms）；上机确认第二次起生效。
  *  - ViewPager#setCurrentItem(int) / (int, boolean) 是 androidx 声明的（没混淆），ProfileViewPager 不覆写；类名 com.ss.android.ugc.aweme.profile.widgets.ProfileViewPager 没混淆。
- * 没有定时器、没有轮询、没有扫描；prof.enter 回调只在底部切页时才有（用户点一次一次），不是点击检测。
+ * 没有定时器、没有轮询、没有扫描；prof.enter 回调只在底部切页时才有（用户点一次一次），不是点击检测；prof.pager 回调里只比较引用 / 一个整数，计数期间才改参数。
  *
  * 局限（没编译、没上机）：
- *  - 热启动（第二次起）抖音恢复标签的 setCurrentItem 在触发后约 470ms 才来，立刻切不会被盖掉（上机确认过：第二次起生效）——推测它读的是「记住的标签」，我们切页后这个记录跟着变了。
- *  - 冷启动 700ms 只比最后一次 (0)（+552ms）多 148ms：机器忙、抖音那几次恢复往后拖时，第一次进「我」仍可能被盖回「作品」；只有一份冷启动追踪，没有第二份。
- *  - 冷启动第一次触发后 700ms 内，你如果手点了页内标签，700ms 到了还是会被切到「喜欢」（消息不看你点了什么）。
- *  - 参数是 Pair 这一点来自 toString 的格式，没有看到类名；回调里用 toString().startsWith("(USER,") 判断，格式变了就不触发（安静失效）。
+ *  - COLD_RESTORES = 3 只来自这一份冷启动追踪（一台手机、一个抖音版本 40.9.0）。抖音更新后次数变了：
+ *      变多 → 多出来的 (0) 没被改，冷启动第一次又被盖回「作品」（症状同 1.35.0）；
+ *      变少 → 剩下的次数会被你之后手点「作品」吃掉，那一下点了没反应（仍停在「喜欢」），再点一次才行；切到首页清零，所以最多影响当次进「我」。
+ *    抖音更新后如果冷启动第一次又不生效，用 TextRec 数冷启动时 ProfileViewPager 上 (0) 的次数，改 COLD_RESTORES。
+ *  - 计数只算 setCurrentItem(0)：抖音恢复如果换成别的页号，不会被数到（安静失效）。
+ *  - 参数是 Pair 这一点来自 toString 的格式，没有看到类名；回调里用 toString().startsWith("(USER,") / ("(HOME,") 判断，格式变了就不触发（安静失效）。
  *    这个 toString 每次底部切页只做一次，不是热路径。
- *  - 别人的主页如果也用 ProfileViewPager 则没有影响：只有点底部「我」才触发；「喜欢」是最后一页只有一个账号的证据。
+ *  - 「喜欢」是最后一页只有一个账号的证据。
  * 没挂上时个人主页保持原样，安静失效。
  */
 final class ProfHook {
@@ -52,24 +49,22 @@ final class ProfHook {
     private static final String ENTER = "com.ss.android.ugc.aweme.main.MainPageFragment$2";
     /** Pair.toString() 里第一项是 USER 的开头。 */
     private static final String USER_PREFIX = "(USER,";
+    /** Pair.toString() 里第一项是 HOME 的开头（切到首页）。 */
+    private static final String HOME_PREFIX = "(HOME,";
     /** 越界页号：ViewPager 收到最后一页（= 喜欢）。 */
     private static final Integer LAST = 99;
 
     private static final XC_MethodHook PAGER_HOOK = new PagerHook();
     private static final XC_MethodHook ENTER_HOOK = new EnterHook();
 
-    /** 冷启动特例：进程里第一次触发延迟这么久再切。 */
-    private static final long COLD_DELAY_MS = 700;
+    /** 冷启动：触发之后抖音自己恢复标签的 setCurrentItem(0) 的次数（TextRec 40.9.0 数出来的，见头部注释）。 */
+    private static final int COLD_RESTORES = 3;
 
     private static volatile WeakReference<Object> pagerRef;
-    /** 还没发过冷启动的那条延时消息（只在主线程回调里读写）。 */
+    /** 进程里还没有过第一次触发（只在主线程回调里读写）。 */
     private static boolean cold = true;
-    private static final Runnable COLD_SWITCH = new Runnable() {
-        @Override
-        public void run() {
-            switchToLast();
-        }
-    };
+    /** 还要改掉几次 setCurrentItem(0)（主线程读写）。 */
+    private static int remaining;
     private static volatile Method setItem;
 
     /** 启动时和每次回到前台都会被调用；功能没开就不挂（没有结论，开了之后回到前台再挂）。 */
@@ -109,7 +104,7 @@ final class ProfHook {
                 "MainPageFragment$2 里没有 onChanged（抖音改了底部标签切换的观察者，需要重新用 TextRec 追踪点底部「我」）", cl);
     }
 
-    /** 只记住个人主页的分页控件，不改任何参数。 */
+    /** 记住个人主页的分页控件；冷启动计数期间把抖音自己恢复标签的 (0) 改成 99。 */
     private static final class PagerHook extends XC_MethodHook {
         @Override
         protected void beforeHookedMethod(MethodHookParam p) {
@@ -117,9 +112,16 @@ final class ProfHook {
                 if (!DanmakuHook.cfg.profFav) return;
                 Object o = p.thisObject;
                 WeakReference<Object> r = pagerRef;
-                if (r != null && r.get() == o) return;          // 已经记着了：一次引用比较就返回
-                if (!PAGER.equals(o.getClass().getName())) return; // 别的 ViewPager
-                pagerRef = new WeakReference<Object>(o);
+                if (r == null || r.get() != o) {                    // 没记着这个对象：才比类名（别的 ViewPager 一次字符串比较就返回）
+                    if (!PAGER.equals(o.getClass().getName())) return;
+                    pagerRef = new WeakReference<Object>(o);
+                }
+                if (remaining <= 0) return;                         // 没在计数：什么都不改
+                Object a = p.args[0];
+                if (!(a instanceof Integer) || ((Integer) a).intValue() != 0) return; // 只数抖音的恢复 (0)；我们自己的 99 放过
+                p.args[0] = LAST;                                   // 恢复 (0) → 喜欢
+                if (p.args.length > 1) p.args[1] = Boolean.FALSE;   // 不演滑动动画
+                remaining--;
             } catch (Throwable ignored) {
             }
         }
@@ -132,11 +134,16 @@ final class ProfHook {
             try {
                 if (!DanmakuHook.cfg.profFav) return;
                 Object a = p.args[0];
-                if (a == null || !a.toString().startsWith(USER_PREFIX)) return; // 不是切到「我」
-                if (cold) {                                                     // 特例：进程里第一次，发一条延时消息，之后不再发
-                    cold = false;
-                    new Handler(Looper.getMainLooper()).postDelayed(COLD_SWITCH, COLD_DELAY_MS);
+                if (a == null) return;
+                String t = a.toString();
+                if (t.startsWith(HOME_PREFIX)) {                                // 切到首页：计数清零
+                    remaining = 0;
                     return;
+                }
+                if (!t.startsWith(USER_PREFIX)) return;                         // 不是切到「我」
+                if (cold) {                                                     // 进程里第一次：开始数抖音随后的恢复
+                    cold = false;
+                    remaining = COLD_RESTORES;
                 }
                 switchToLast();
             } catch (Throwable ignored) {
